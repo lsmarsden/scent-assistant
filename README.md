@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/header.jpg" alt="Scent Assistant" width="100%">
+  <img src="https://raw.githubusercontent.com/mr-sparks/scent-assistant/main/images/header.jpg" alt="Scent Assistant" width="100%">
 </p>
 
 <h1 align="center">Scent Assistant</h1>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://ko-fi.com/K3K21WUCCD"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi"></a>
+  <a href="https://ko-fi.com/K3K21WUCCD"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white" alt="Buy me a coffee"></a>
 </p>
 
 <p align="center">
