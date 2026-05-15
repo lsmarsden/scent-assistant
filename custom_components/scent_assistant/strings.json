@@ -37,6 +37,17 @@
         "data": {
           "gw_password": "Device password (4 ASCII characters, optional)"
         }
+      },
+      "bluetooth_confirm": {
+        "title": "Add Scent Diffuser",
+        "description": "Detected {device} as {device_type}. Add this device?"
+      },
+      "manual_type": {
+        "title": "Select Device Type",
+        "description": "Auto-detection couldn't identify {device} from its advertisement. Pick the matching family below - see the integratino README for help. If you select Scent Marketing GW you'll be asked for the device password on the next step.",
+        "data": {
+          "device_type": "Device type"
+        }
       }
     },
     "error": {

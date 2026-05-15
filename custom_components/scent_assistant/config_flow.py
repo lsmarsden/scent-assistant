@@ -8,6 +8,9 @@ import voluptuous as vol
 from bleak import BleakScanner
 
 from homeassistant import config_entries
+from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+
 from .const import (
     DOMAIN,
     CONF_DEVICE_TYPE,
@@ -27,6 +30,16 @@ from .protocol_cloud import AromaLinkCloudClient
 
 _LOGGER = logging.getLogger(__name__)
 
+# Human readable labels
+# order is most likely first when auto-detect misses
+_DEVICE_TYPE_LABELS: dict[str, str] ={
+    DeviceType.SCENT_MARKETING_GW.value: "Scent Marketing GW (EE01 service, password-protected)",
+    DeviceType.SCENT_MARKETING_GW_XOR.value: "Scent Marketing GW - WiFi/encrypted variant",
+    DeviceType.SCENT_MARKETING_AK.value: "Scent Marketing AK (FFF0 / FFF6)",
+    DeviceType.AROMA_LINK.value: "Aroma-Link / JCloud / Cavit / similar",
+    DeviceType.TUYA_BLE.value: "ShinePick / Tuya BLE (BT-ivy*)",
+    DeviceType.SCENTIMENT.value: "Scentiment Diffuser Air 2",
+}
 
 class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle config flow for Scent Diffuser."""
@@ -42,7 +55,10 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._selected_device_type: str | None = None
         self._selected_sm_metadata: dict | None = None
         self._selected_gw_password: str | None = None
-
+        # true when current step reached from push discovery
+        # advertisement (async_step_bluetooth). used by manual type step
+        # to know which next step to chain after user picks.
+        self._auto_detect_failed: bool = False
     def _create_ble_entry(self) -> config_entries.ConfigFlowResult:
         """Build the BLE-mode config entry. Shared by all BLE setup paths."""
         entry_data: dict[str, Any] = {
@@ -90,79 +106,160 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # BLE flow
     # ------------------------------------------------------------------
 
+    async def _route_after_type_chosen(self) -> config_entries.ConfigFlowResult:
+        """Pick next step based on (possibly user-overriden) family.
+
+        GW devices may be password protected. everything else can create entry directly.
+        DeviceType is StrEnum so '==' against '.value' works
+        for stored strings and live enum numbers.
+        """
+        if self._selected_device_type in (
+            DeviceType.SCENT_MARKETING_GW.value,
+            DeviceType.SCENT_MARKETING_GW_XOR.value,
+        ):
+            return await self.async_step_gw_password()
+        return self._create_ble_entry()
+
+    async def async_step_bluetooth(
+            self, discovery_info: BluetoothServiceInfoBleak
+    ) -> config_entries.ConfigFlowResult:
+        """Handle BT advertisement matched by manifest matchers.
+
+        Preferred entry point: HA pushes fully-cahced advertisement
+         (with manufacturer data intact)
+        the momement device comes into range, so detection
+        is reliable, moreso than a user-triggered scan.
+        """
+        await self.async_set_unique_id(discovery_info.address)
+        self._abort_if_unique_id_configured()
+
+        adv = discovery_info.advertisement
+        name = discovery_info.name or (adv.local_name if adv else "") or ""
+        dtype = detect_device_type(name, adv)
+        if not name:
+            name = f"Scent Diffuser {discovery_info.address[-8:]}"
+
+        self._selected_ble_address = discovery_info.address
+        self._selected_ble_name = name
+        self._selected_device_type = (dtype.value if dtype else None)
+        self._selected_sm_metadata = (
+            extract_scent_marketing_metadata(adv)
+            if dtype and dtype.value.startswith("scent_marketing")
+            else None
+        )
+
+    #     Show the device on discovery card so it's clear what we're adding
+        self.context["title_placeholders"] = {"name": name}
+
+        if dtype is None:
+            self._auto_detect_failed = True
+            return await self.async_step_manual_type()
+        return await self.async_step_bluetooth_confirm()
+
+    async def async_step_bluetooth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Confirm adding an auto-discovered device"""
+        if user_input is not None:
+            return await self._route_after_type_chosen()
+
+        type_label = _DEVICE_TYPE_LABELS.get(
+            self._selected_device_type or "", self._selected_device_type or "unknown"
+        )
+        return self.async_show_form(
+            step_id="bluetooth_confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "device": self._selected_ble_name or "",
+                "device_type": type_label,
+            },
+        )
+
+    async def async_step_manual_type(
+            self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Let the user pick a device family when auto-detection fails"""
+        if user_input is not None:
+            self._selected_device_type = user_input[CONF_DEVICE_TYPE]
+            return await self._route_after_type_chosen()
+
+        return self.async_show_form(
+            step_id="manual_type",
+            data_schema=vol.Schema({
+                vol.Required(CONF_DEVICE_TYPE): vol.In(_DEVICE_TYPE_LABELS),
+            }),
+            description_placeholders={
+                "device": self._selected_ble_name or self._selected_ble_address or "this device",
+            },
+        )
+
     async def async_step_ble_scan(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Scan for BLE devices and let user select one."""
+        """Pick a device from HA's cached BT discovery.
+
+        Uses bluetooth.async_dsicovered_service_info() instead of running
+        a one-shot Bleak scan: HA already maintains a continuously-updated
+        advertisement cache (with manufaacturer data) across all of its BT
+        adapters and proxies, so we get the full picture instead of a 10s
+        snapshot."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             address = user_input.get("ble_address")
             if address:
-                # User selected a device – proceed to create entry
                 device_info = self._discovered_devices.get(address, {})
                 self._selected_ble_address = address
                 self._selected_ble_name = device_info.get("name", "")
-                self._selected_device_type = device_info.get("device_type", "aroma_link")
+                self._selected_device_type = device_info.get("device_type")
                 self._selected_sm_metadata = device_info.get("sm_metadata")
 
-                # Check if already configured
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
 
-                # Scent Marketing GW devices may be password-protected.
-                # We can't tell at scan time, so offer the user a chance
-                # to supply one. AK devices have no such mechanism.
-                if self._selected_device_type in (
-                    DeviceType.SCENT_MARKETING_GW,
-                    DeviceType.SCENT_MARKETING_GW_XOR,
-                ):
-                    return await self.async_step_gw_password()
+                # If detection failed, send user through manual picker
+                #  rather than silently falling back to AROMA_LINK
+                # which writes to wrong characteristic for everything else
+                if not device_info.get("auto_detected"):
+                    self._auto_detect_failed = True
+                    return await self.async_step_manual_type()
 
-                return self._create_ble_entry()
-            # If address is missing, user clicked Submit on an empty error
-            # form – fall through to re-scan.
+                return await self._route_after_type_chosen()
 
-        # Scan for devices
+        # Pull the cached service-info list from HA's BT integration
         self._discovered_devices = {}
-        try:
-            devices = await BleakScanner.discover(timeout=DEFAULT_SCAN_TIMEOUT, return_adv=True)
-            for device, adv_data in devices.values():
-                name = device.name or adv_data.local_name or ""
-                dtype = detect_device_type(name, adv_data)
+        existing_addresses = {
+            entry.unique_id
+            for entry in self._async_current_entries(include_ignore=False)
+            if entry.unique_id
+        }
+        for service_info in bluetooth.async_discovered_service_info(self.hass):
+            if service_info.address in existing_addresses:
+                continue
+            adv = service_info.advertisement
+            name = service_info.name or (adv.local_name if adv else "") or ""
+            dtype = detect_device_type(name, adv)
+            if not name and dtype is None:
+        #         Skip unnamed devices we can't identify
+        # the picker would just be too long anyway
+                continue
+            if not name:
+                name = f"Scent Diffuser {service_info.address[-8:]}"
+            sm_meta = (
+                extract_scent_marketing_metadata(adv)
+                if dtype and dtype.value.startswith("scent_marketing")
+                else None
+            )
+            self._discovered_devices[service_info.address] = {
+                "name": name,
+                "device_type": dtype.value if dtype else None,
+                "rssi": service_info.rssi,
+                "auto_detected": dtype is not None,
+                "sm_metadata": sm_meta,
+            }
 
-                # A Scent Marketing device may advertise without a useful
-                # local name (the app routes purely on manufacturer-data),
-                # so we accept it even when `name` is empty.
-                if not name and dtype is None:
-                    continue
-                if not name:
-                    name = f"Scent Marketing {device.address[-8:]}"
-
-                sm_meta = extract_scent_marketing_metadata(adv_data) if dtype and dtype.value.startswith("scent_marketing") else None
-                if sm_meta:
-                    _LOGGER.info(
-                        "Discovered Scent Marketing device: addr=%s name=%s family=%s mfr_id=0x%04X pid=%s flag=%s raw=%s",
-                        device.address, name, dtype.value,
-                        sm_meta["mfr_id"] or 0, sm_meta["pid"], sm_meta["wifi_flag"],
-                        sm_meta["raw_hex"],
-                    )
-
-                self._discovered_devices[device.address] = {
-                    "name": name,
-                    "device_type": dtype or DeviceType.AROMA_LINK,
-                    "rssi": adv_data.rssi,
-                    "auto_detected": dtype is not None,
-                    "sm_metadata": sm_meta,
-                }
-        except Exception as err:
-            _LOGGER.error("BLE scan failed: %s", err)
-            errors["base"] = "cannot_connect"
-
-        if not self._discovered_devices and not errors:
+        if not self._discovered_devices:
             errors["base"] = "no_devices"
-
-        if errors:
             return self.async_show_form(
                 step_id="ble_scan",
                 data_schema=vol.Schema({}),
@@ -175,11 +272,11 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._discovered_devices.items(),
             key=lambda x: (not x[1].get("auto_detected", False), -x[1]["rssi"]),
         ):
-            short_mac = addr[-8:]  # Last 8 chars of MAC for identification
+            short_mac = addr[-8:]
             if info.get("auto_detected"):
                 device_options[addr] = f"✓ {info['name']} ({short_mac})"
             else:
-                device_options[addr] = f"  {info['name']} ({short_mac})"
+                device_options[addr] = f"? {info['name']} ({short_mac})"
 
         return self.async_show_form(
             step_id="ble_scan",

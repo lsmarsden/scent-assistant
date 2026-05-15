@@ -10,7 +10,7 @@ from .const import (
     DeviceType,
     SERVICE_UUID, CHAR_WRITE_UUID, CHAR_NOTIFY_UUID,
     SCENTIMENT_SERVICE_UUID, SCENTIMENT_CHAR_WRITE_UUID, SCENTIMENT_CHAR_NOTIFY_UUID,
-    SM_AK_SERVICE_UUID, SM_AK_CHAR_UUID,
+    SM_AK_SERVICE_UUID, SM_AK_CHAR_UUID, SM_GW_ALT_SERVICE_UUID,
     SM_AK_CMD_QUERY_INFO, SM_AK_CMD_PROBE, SM_AK_CMD_QUERY_DEVICE_TYPE,
     SM_AK_CMD_TIME_SYNC, SM_AK_CMD_DEVICE_NAME, SM_AK_CMD_DEVICE_LABEL,
     SM_AK_CMD_OIL_NAME, SM_AK_CMD_OIL_AMOUNT, SM_AK_CMD_CONTROL_STATE,
@@ -1341,6 +1341,31 @@ def extract_scent_marketing_metadata(advertisement_data) -> dict:
                     out["mac_from_adv"] = hex_str[22:34]
             break
     return out
+
+
+def protocol_from_services(client_services) -> DeviceType | None:
+    """Inspect a connected client's GATT services and pick matching family.    """
+    service_uuids = {s.uuid.lower() for s in client_services}
+
+#     GW family is most distinctive - own service UUID with no overlap
+    if SM_GW_SERVICE_UUID in service_uuids or SM_GW_ALT_SERVICE_UUID in service_uuids:
+        return DeviceType.SCENT_MARKETING_GW
+
+    if SCENTIMENT_SERVICE_UUID in service_uuids:
+        return DeviceType.SCENTIMENT
+
+#     FFF0 shared by Aroma-Link, Tuya BLE, AK family. only AK
+# exposes FFF6 underneath, others use FFF2/FFF1.
+    if SERVICE_UUID in service_uuids:
+        for service in client_services:
+            if service.uuid.lower() != SERVICE_UUID:
+                continue
+            char_uuids = {c.uuid.lower() for c in service.characteristics}
+            if SM_AK_CHAR_UUID in char_uuids:
+                return DeviceType.SCENT_MARKETING_AK
+            break
+
+    return None
 
 
 def detect_device_type(

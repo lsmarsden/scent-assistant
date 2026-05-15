@@ -10,7 +10,16 @@ import asyncio
 import logging
 from datetime import datetime
 
-from bleak import BleakClient, BleakScanner, BleakError
+from bleak import BleakClient, BleakError
+from bleak_retry_connector import (
+    BLEAK_RETRY_EXCEPTIONS,
+    BleakNotFoundError,
+    close_state_connections_by_address,
+    establish_connection,
+)
+
+from homeassistant.components import bluetooth
+from homeassistant.core import HomeAssistant
 
 from .const import (
     DeviceType,
@@ -30,6 +39,7 @@ from .protocol_ble import (
     ScentMarketingGwXorProtocol,
     get_protocol,
     detect_device_type,
+    protocol_from_services,
 )
 from .protocol_cloud import AromaLinkCloudClient
 
@@ -44,6 +54,7 @@ class ScentDiffuserDevice:
 
     def __init__(
         self,
+        hass: HomeAssistant | None = None,
         ble_address: str | None = None,
         ble_name: str | None = None,
         device_type: DeviceType | None = None,
@@ -52,6 +63,11 @@ class ScentDiffuserDevice:
         sm_metadata: dict | None = None,
         gw_password: str | None = None,
     ) -> None:
+        # HA ref used to look up cached BLEDevice objects from
+        # BT integration. Optional so existing tests
+        # still work without HA constructed.
+        # runtime supplies from async_setup_entry
+        self._hass = hass
         # Detection metadata from the config flow — populated only for
         # Scent Marketing family devices.
         self._sm_metadata = sm_metadata or {}
@@ -69,6 +85,9 @@ class ScentDiffuserDevice:
         self._ble_lock = asyncio.Lock()
         self._ble_disconnect_task: asyncio.Task | None = None
         self._ble_has_synced_time = False
+        # Set once successfuloly reconciled protocol against the
+        # device GATT layout so we don't log override every reconnect
+        self._protocol_locked = False
 
         # Device type
         if device_type:
@@ -217,20 +236,41 @@ class ScentDiffuserDevice:
 
             try:
                 _LOGGER.debug("BLE connecting to %s", self._ble_name)
-                self._ble_client = BleakClient(
-                    self._ble_address,
-                    timeout=DEFAULT_CONNECT_TIMEOUT,
+                ble_device = self._resolve_ble_device()
+                if ble_device is None:
+                    _LOGGER.warning(
+                        "BLE device %s (%s) is not currently discoverable to HA."
+                        "Command will retry on next attempt.",
+                        self._ble_name, self._ble_address
+                    )
+                    return False
+
+                # Some adapters hang on to half-open connection
+                # from prev attempt; bleak-retry-connector cleans them up
+                await close_state_connections_by_address(self._ble_address)
+
+                self._ble_client = await establish_connection(
+                    BleakClient,
+                    ble_device,
+                    self._ble_name or self._ble_address,
+                    disconnected_callback=self._on_ble_disconnect,
+                    max_attempts=3,
                 )
-                await self._ble_client.connect()
                 self._ble_connected = True
+
+                # reconcile protocol against device GATT
+                # layout. reuses common case where device was
+                # added before HA cached manufacturer data and
+                # config flow recorded AROMA_LINK fallback
+                self._reconcile_protocol_from_gatt()
 
                 # Subscribe to notifications for responses
                 try:
                     await self._ble_client.start_notify(
                         self._protocol.notify_char_uuid, self._on_ble_notification
                     )
-                except Exception:
-                    _LOGGER.debug("Could not subscribe to notifications")
+                except Exception as err:
+                    _LOGGER.debug("Could not subscribe to notifications: %s", err)
 
                 # Time sync on first connection of this session (skipped for
                 # protocols that don't support it).
@@ -258,10 +298,67 @@ class ScentDiffuserDevice:
                 self._schedule_disconnect()
                 return True
 
-            except (BleakError, asyncio.TimeoutError, OSError) as err:
+            except BleakNotFoundError as err:
+                _LOGGER.warning("BLE device %s not found: %s", self._ble_name, err)
+                self._ble_connected = False
+                return False
+            except BLEAK_RETRY_EXCEPTIONS as err:
                 _LOGGER.warning("BLE connect failed for %s: %s", self._ble_name, err)
                 self._ble_connected = False
                 return False
+
+    def _resolve_ble_device(self):
+        """Look up cahced BLEDevice fomr HA BT integration.
+
+        returns None if HA hasn't seen this address recently."""
+        if self._hass is None:
+            return None
+        return bluetooth.async_ble_device_from_address(
+            self._hass, self._ble_address, connectable=True
+        )
+
+    def _on_ble_disconnect(self, _client: BleakClient) -> None:
+        """Mark device as disconnected so next call reconnectd cleanly"""
+        self._ble_connected = False
+
+    def _reconcile_protocol_from_gatt(self) -> None:
+        """Switch protocol if GATT layout disagrees with cached type.
+
+        Runs once per device manager lifetime. handles case when
+        config flow stored AROMA_LINK as fallback due to no
+        manufact. data visible during scan."""
+        if self._protocol_locked or not self._ble_client:
+            return
+        try:
+            services = self._ble_client.services
+        except Exception:
+            return
+        if services is None:
+            return
+
+        detected = protocol_from_services(services)
+        self._protocol_locked = True
+        if detected is None or detected == self._device_type:
+            return
+    #     don't downgrade XOR encrypted GW back to plain GW
+        if (
+            detected == DeviceType.SCENT_MARKETING_GW
+            and self._device_type == DeviceType.SCENT_MARKETING_GW_XOR
+        ):
+            return
+
+        _LOGGER.warning(
+            "GATT layout for %s indicates %s, switching from %s",
+            self._ble_name or self._ble_address,
+            detected.value, self._device_type.value,
+        )
+        self._device_type = detected
+        mac = (self._ble_address or "").replace(":", "")
+        pid = self._sm_metadata.get("pid") if self._sm_metadata else None
+        self._protocol = get_protocol(detected, mac=mac, pid=pid)
+    #     force time sync to re-run with new protocol layout
+        self._ble_has_synced_time = False
+
 
     def _schedule_disconnect(self) -> None:
         """Schedule BLE disconnect after idle period."""
