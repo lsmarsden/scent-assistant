@@ -37,10 +37,10 @@ async def async_setup_entry(
     # Scent Marketing devices expose extra controls when running on BLE.
     if device.device_type in SCENT_MARKETING_TYPES and not is_cloud:
         entities.append(DiffuserLockSwitch(device, entry))
+        # AK lamp = control-bitmask bit; GW lamp = DP-11 light. Both are
+        # already wired through device.set_lamp().
+        entities.append(DiffuserLampSwitch(device, entry))
         if device.device_type == DeviceType.SCENT_MARKETING_AK:
-            # The AK control bitmask carries lamp + fan bits we can drive
-            # without any extra protocol work.
-            entities.append(DiffuserLampSwitch(device, entry))
             entities.append(DiffuserFanSwitch(device, entry))
 
     async_add_entities(entities)

@@ -1057,10 +1057,20 @@ class ScentMarketingGwProtocol(BleProtocol):
             first = payload[0] & 0xFF
             if 113 <= first <= 127 and len(payload) >= 7:
                 result["oil_remaining"] = (payload[5] << 8) | payload[6]
+                _LOGGER.debug("GW DP-12 oil (u16 branch, first=%d): payload=%s -> %d",
+                              first, payload.hex(), result["oil_remaining"])
             elif len(payload) >= 2:
                 pct_byte = payload[1] & 0xFF
                 if pct_byte not in (0xE0,):
                     result["oil_remaining"] = int(pct_byte / 2.55)
+                    _LOGGER.debug("GW DP-12 oil (pct branch, first=%d, pct_byte=%d): payload=%s -> %d",
+                                  first, pct_byte, payload.hex(), result["oil_remaining"])
+                else:
+                    _LOGGER.debug("GW DP-12 oil (pct=0xE0 sentinel, ignored): payload=%s",
+                                  payload.hex())
+            else:
+                _LOGGER.debug("GW DP-12 oil (unhandled, len=%d): payload=%s",
+                              len(payload), payload.hex())
         elif dp_id == SM_GW_DP_LIGHT and len(payload) >= 2:
             light_type = payload[0] & 0xFF
             light_status = payload[1] & 0xFF
