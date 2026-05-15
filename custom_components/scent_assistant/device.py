@@ -14,7 +14,7 @@ from bleak import BleakClient, BleakError
 from bleak_retry_connector import (
     BLEAK_RETRY_EXCEPTIONS,
     BleakNotFoundError,
-    close_state_connections_by_address,
+    close_stale_connections_by_address,
     establish_connection,
 )
 
@@ -247,7 +247,7 @@ class ScentDiffuserDevice:
 
                 # Some adapters hang on to half-open connection
                 # from prev attempt; bleak-retry-connector cleans them up
-                await close_state_connections_by_address(self._ble_address)
+                await close_stale_connections_by_address(self._ble_address)
 
                 self._ble_client = await establish_connection(
                     BleakClient,
