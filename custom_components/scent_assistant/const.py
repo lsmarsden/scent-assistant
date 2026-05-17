@@ -93,7 +93,7 @@ SM_MFR_ID_GW_ALT = 61441   # 0xF001 — GW family alternate ID (WiFi-routed devi
 # original PacketLogger capture).
 AROMAWAVE_MFR_ID = 0xC599 # 50585
 AROMAWAVE_SERVICE_UUID = "00010203-0405-0607-0809-0a0b0c0d1910"
-AROMAWAVE_CHAR_UUID = "00010203-0405-0607-0809-0a0b0c0d1910"
+AROMAWAVE_CHAR_UUID = "00010203-0405-0607-0809-0a0b0c0d2b10"
 
 # GW manufacturer-data leading byte determines the encoding sub-variant.
 # 00 / unknown        → plain binary DP protocol
