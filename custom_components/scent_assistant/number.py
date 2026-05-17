@@ -11,8 +11,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DOMAIN,
     DeviceType,
-    SM_GW_DP_CUSTOMIZE_GEAR,
-    SM_GW_DP_MODE_TASKS,
 )
 from .device import ScentDiffuserDevice
 
@@ -145,7 +143,7 @@ class GwWorkDurationNumber(NumberEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available and self._device.has_observed_dp(SM_GW_DP_CUSTOMIZE_GEAR)
+        return self._device.available and self._device.state.work_seconds is not None
 
     async def async_set_native_value(self, value: float) -> None:
         pause = self._device.state.pause_seconds or 60
@@ -180,7 +178,7 @@ class GwPauseDurationNumber(NumberEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available and self._device.has_observed_dp(SM_GW_DP_CUSTOMIZE_GEAR)
+        return self._device.available and self._device.state.pause_seconds is not None
 
     async def async_set_native_value(self, value: float) -> None:
         work = self._device.state.work_seconds or 5
@@ -220,7 +218,7 @@ class GwGradeNumber(NumberEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available and self._device.has_observed_dp(SM_GW_DP_MODE_TASKS)
+        return self._device.available and self._device.state.grade is not None
 
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_grade(int(value))

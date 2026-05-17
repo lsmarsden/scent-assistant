@@ -16,8 +16,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DOMAIN,
     DeviceType,
-    SM_GW_DP_BATTERY,
-    SM_GW_DP_OIL,
 )
 from .device import ScentDiffuserDevice
 
@@ -123,8 +121,6 @@ class DiffuserBatterySensor(SensorEntity):
     def available(self) -> bool:
         if not self._device.available:
             return False
-        if self._device.device_type in GW_TYPES:
-            return self._device.has_observed_dp(SM_GW_DP_BATTERY)
         return self._device.state.battery is not None
 
 
@@ -165,8 +161,6 @@ class DiffuserOilSensor(SensorEntity):
     def available(self) -> bool:
         if not self._device.available:
             return False
-        if self._device.device_type in GW_TYPES:
-            return self._device.has_observed_dp(SM_GW_DP_OIL)
         return self._device.state.oil_remaining is not None
 
 
