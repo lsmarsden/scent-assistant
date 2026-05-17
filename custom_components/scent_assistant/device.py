@@ -46,7 +46,7 @@ from .protocol_cloud import AromaLinkCloudClient
 _LOGGER = logging.getLogger(__name__)
 
 # Disconnect BLE after this many seconds of inactivity
-BLE_IDLE_DISCONNECT_SECONDS = 10
+BLE_IDLE_DISCONNECT_SECONDS = 86400
 
 
 class ScentDiffuserDevice:

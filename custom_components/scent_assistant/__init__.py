@@ -100,10 +100,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     # Initial state query (BLE: connects briefly then disconnects; Cloud: polls API)
-    try:
-        await device.async_setup()
-    except Exception as err:
-        _LOGGER.warning("Initial state query failed, will retry on first command: %s", err)
+    # try:
+        # await device.async_setup()
+    # except Exception as err:
+    #     _LOGGER.warning("Initial state query failed, will retry on first command: %s", err)
 
     hass.data[DOMAIN][entry.entry_id] = device
 
