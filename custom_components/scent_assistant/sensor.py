@@ -144,6 +144,15 @@ class DiffuserOilSensor(SensorEntity):
         return self._device.state.oil_remaining
 
     @property
+    def extra_state_attributes(self) -> dict:
+        attrs: dict = {}
+        if self._device.state.oil_remaining_ml is not None:
+            attrs["remaining_ml"] = self._device.state.oil_remaining_ml
+        if self._device.state.oil_total_ml is not None:
+            attrs["total_ml"] = self._device.state.oil_total_ml
+        return attrs
+
+    @property
     def available(self) -> bool:
         return self._device.available and self._device.state.oil_remaining is not None
 

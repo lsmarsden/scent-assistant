@@ -81,6 +81,8 @@ class DiffuserState:
     # Scent Marketing GW-only
     lock: bool | None = None           # child-lock state
     oil_remaining: int | None = None   # percent 0-100
+    oil_remaining_ml: int | None = None   # raw remaining volume in ml
+    oil_total_ml: int | None = None   # bottle capacity in ml
     light_on: bool | None = None       # auxiliary LED state
     device_name: str | None = None     # user-set device name (DP 6)
     password_required: bool | None = None  # GW device demands password auth
@@ -1051,26 +1053,27 @@ class ScentMarketingGwProtocol(BleProtocol):
             text = payload.rstrip(b"\x00").decode("utf-8", errors="replace").strip()
             if text:
                 result["remark"] = text
-        elif dp_id == SM_GW_DP_BATTERY and len(payload) >= 3:
+        elif dp_id == SM_GW_DP_BATTERY and len(payload) >= 2:
+            # DP-12 battery: 2-byte payload, second byte is the percentage
             result["battery"] = payload[1] & 0xFF
         elif dp_id == SM_GW_DP_OIL and len(payload) >= 1:
+            # DP-8 oil. Extended layout (marker 0x71-0x7F):
+            # [marker:1][total_ml:u16-be][cur_ml:u16-be][remaining_ml:u16-be]
+            # [counter:u16-be][zero pad]
+            # Compact layout; [first:1][pct_byte:1] where pct_byte is 0-255.
             first = payload[0] & 0xFF
             if 113 <= first <= 127 and len(payload) >= 7:
-                result["oil_remaining"] = (payload[5] << 8) | payload[6]
-                _LOGGER.debug("GW DP-12 oil (u16 branch, first=%d): payload=%s -> %d",
-                              first, payload.hex(), result["oil_remaining"])
+                total_ml = (payload[1] << 8) | payload[2]
+                remaining_ml = (payload[5] << 8) | payload[6]
+                result["oil_total_ml"] = total_ml
+                result["oil_remaining_ml"] = remaining_ml
+                if total_ml > 0:
+                    pct = round(100 * remaining_ml / total_ml)
+                    result["oil_remaining"] = max(0, min(100, pct))
             elif len(payload) >= 2:
                 pct_byte = payload[1] & 0xFF
-                if pct_byte not in (0xE0,):
-                    result["oil_remaining"] = int(pct_byte / 2.55)
-                    _LOGGER.debug("GW DP-12 oil (pct branch, first=%d, pct_byte=%d): payload=%s -> %d",
-                                  first, pct_byte, payload.hex(), result["oil_remaining"])
-                else:
-                    _LOGGER.debug("GW DP-12 oil (pct=0xE0 sentinel, ignored): payload=%s",
-                                  payload.hex())
-            else:
-                _LOGGER.debug("GW DP-12 oil (unhandled, len=%d): payload=%s",
-                              len(payload), payload.hex())
+                if pct_byte != 0xE0:
+                    result["oil_remaining"] = max(0, min(100, int(pct_byte / 2.55)))
         elif dp_id == SM_GW_DP_LIGHT and len(payload) >= 2:
             light_type = payload[0] & 0xFF
             light_status = payload[1] & 0xFF

@@ -467,6 +467,12 @@ class ScentDiffuserDevice:
         if "oil_remaining" in updates:
             self._state.oil_remaining = updates["oil_remaining"]
             changed = True
+        if "oil_remaining_ml" in updates:
+            self._state.oil_remaining_ml = updates["oil_remaining_ml"]
+            changed = True
+        if "oil_total_ml" in updates:
+            self._state.oil_total_ml = updates["oil_total_ml"]
+            changed = True
         if "light_on" in updates:
             self._state.light_on = updates["light_on"]
             changed = True
