@@ -86,14 +86,14 @@ SM_MFR_ID_AK = 22851       # 0x5943 — AK family
 SM_MFR_ID_GW = 17932       # 0x460C — GW family (BLE/WiFi/Cellular)
 SM_MFR_ID_GW_ALT = 61441   # 0xF001 — GW family alternate ID (WiFi-routed devices)
 
-# Aromawave Ultra Pro - separate vendor app (Aromwave). Uses AE-prefixed
-# custom service UUIDs and JSON-wrapped FEEF/EFFF hex frames
+# Aromawave Ultra Pro - separate vendor app (Aromwave). Uses a custom 128-bit service
+# alongside several AE-prefixed services; the JSON+FEEF/EFFF hex frames go
+# to a single read/write/notify characteristic on the custom service.
+# Verified against an ESP32-proxied GATT discovery (handle 0x0088 in the
+# original PacketLogger capture).
 AROMAWAVE_MFR_ID = 0xC599 # 50585
-AROMAWAVE_SERVICE_UUID = "0000ae30-0000-1000-8000-00805f9b34fb"
-# Single chaaracteristic write+notify on AE10 (handle 0x0088 in PacketLogger
-# captures). Unverified against a fresh GATT discovery - adjust if writes
-# fail with 'charaacteristic not found'
-AROMAWAVE_CHAR_UUID = "0000ae10-0000-1000-8000-00805f9b34fb"
+AROMAWAVE_SERVICE_UUID = "00010203-0405-0607-0809-0a0b0c0d1910"
+AROMAWAVE_CHAR_UUID = "00010203-0405-0607-0809-0a0b0c0d1910"
 
 # GW manufacturer-data leading byte determines the encoding sub-variant.
 # 00 / unknown        → plain binary DP protocol
