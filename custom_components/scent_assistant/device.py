@@ -1,8 +1,8 @@
 """Unified device manager for scent diffusers.
 
-Uses connect-on-demand for BLE: connects only when sending a command,
-then disconnects after a short idle period. This frees the BLE adapter
-for other devices.
+Holds a persistent BLE connection per device managed by a supervisor task
+that reconnects on drop with exponential backoff. Push notifications and
+external state changes flow naturally; commands are sent over the live link.
 """
 from __future__ import annotations
 
@@ -45,8 +45,9 @@ from .protocol_cloud import AromaLinkCloudClient
 
 _LOGGER = logging.getLogger(__name__)
 
-# Disconnect BLE after this many seconds of inactivity
-BLE_IDLE_DISCONNECT_SECONDS = 86400
+# Reconnect backoff for the BLE supervisor task (seconds).
+BLE_BACKOFF_INITIAL = 5
+BLE_BACKOFF_MAX = 60
 
 
 class ScentDiffuserDevice:
@@ -83,7 +84,9 @@ class ScentDiffuserDevice:
         self._ble_client: BleakClient | None = None
         self._ble_connected = False
         self._ble_lock = asyncio.Lock()
-        self._ble_disconnect_task: asyncio.Task | None = None
+        self._ble_supervisor_task: asyncio.Task | None = None
+        self._ble_disconnect_event = asyncio.Event()
+        self._ble_stop = False
         self._ble_has_synced_time = False
         # Set once successfuloly reconciled protocol against the
         # device GATT layout so we don't log override every reconnect
@@ -212,26 +215,19 @@ class ScentDiffuserDevice:
                 _LOGGER.exception("Error in state callback")
 
     # ------------------------------------------------------------------
-    # BLE connect-on-demand
+    # BLE persistent connection
     # ------------------------------------------------------------------
 
-    async def _ble_connect(self) -> bool:
-        """Connect to BLE if not already connected. Auto-disconnects after idle."""
+    async def _ensure_connected(self) -> bool:
+        """Establish BLE connection if not already up. Called by the supervisor."""
         if not self._ble_address:
             return False
 
-        # Cancel pending disconnect
-        if self._ble_disconnect_task and not self._ble_disconnect_task.done():
-            self._ble_disconnect_task.cancel()
-
         if self._ble_connected and self._ble_client and self._ble_client.is_connected:
-            self._schedule_disconnect()
             return True
 
         async with self._ble_lock:
-            # Double-check after acquiring lock
             if self._ble_connected and self._ble_client and self._ble_client.is_connected:
-                self._schedule_disconnect()
                 return True
 
             try:
@@ -295,7 +291,6 @@ class ScentDiffuserDevice:
                     except Exception as err:
                         _LOGGER.debug("Scent Marketing GW: password send failed: %s", err)
 
-                self._schedule_disconnect()
                 return True
 
             except BleakNotFoundError as err:
@@ -318,8 +313,12 @@ class ScentDiffuserDevice:
         )
 
     def _on_ble_disconnect(self, _client: BleakClient) -> None:
-        """Mark device as disconnected so next call reconnectd cleanly"""
+        """Active disconnect handler. Resets per-connection state and wakes
+        the supervisor so it reconnects with backoff."""
         self._ble_connected = False
+        #Re-run time sync and GW password handshake on the next connect.
+        self._ble_has_synced_time = False
+        self._ble_disconnect_event.set()
 
     def _reconcile_protocol_from_gatt(self) -> None:
         """Switch protocol if GATT layout disagrees with cached type.
@@ -371,24 +370,22 @@ class ScentDiffuserDevice:
         self._ble_has_synced_time = False
 
 
-    def _schedule_disconnect(self) -> None:
-        """Schedule BLE disconnect after idle period."""
-        if self._ble_disconnect_task and not self._ble_disconnect_task.done():
-            self._ble_disconnect_task.cancel()
-        self._ble_disconnect_task = asyncio.ensure_future(self._delayed_disconnect())
+    async def _ble_supervisor(self) -> None:
+        """Hold a persistent BLE connection; reconnect-on-drop with backoff.
 
-    async def _delayed_disconnect(self) -> None:
-        """Disconnect BLE after idle timeout."""
-        await asyncio.sleep(BLE_IDLE_DISCONNECT_SECONDS)
-        async with self._ble_lock:
-            if self._ble_client and self._ble_client.is_connected:
-                try:
-                    await self._ble_client.disconnect()
-                    _LOGGER.debug("BLE disconnected (idle): %s", self._ble_name)
-                except Exception:
-                    pass
-            self._ble_client = None
-            self._ble_connected = False
+        The supervisor connects eagerly, then sleeps until `_on_ble_disconnect`
+        signals a drop. Failures back off exponentially up to BLE_BACKOFF_MAX
+        so a temporarily out-of-range device doesn't spin the BT adapter."""
+        backoff = BLE_BACKOFF_INITIAL
+        while not self._ble_stop:
+            ok = await self._ensure_connected()
+            if not ok:
+                await asyncio.sleep(backoff)
+                backoff = min(BLE_BACKOFF_MAX, backoff * 2)
+                continue
+            backoff = BLE_BACKOFF_INITIAL
+            self._ble_disconnect_event.clear()
+            await self._ble_disconnect_event.wait()
 
     async def _ble_send(self, data: bytes) -> bool:
         """Send a command via BLE.
@@ -416,13 +413,14 @@ class ScentDiffuserDevice:
         return True
 
     async def _ble_execute(self, data: bytes) -> bool:
-        """Connect, send command, schedule disconnect."""
-        if await self._ble_connect():
-            success = await self._ble_send(data)
-            # Wait briefly for notification response
+        """Send a command and wait briefly for the notification response.
+
+        Connection is held by the supervisor task - if it isn't currently up
+        the write fails and HA surfaces it as a transient command failure."""
+        success = await self._ble_send(data)
+        if success:
             await asyncio.sleep(1.0)
-            return success
-        return False
+        return success
 
     def _on_ble_notification(self, sender: int, data: bytearray) -> None:
         """Handle incoming BLE notification."""
@@ -737,11 +735,9 @@ class ScentDiffuserDevice:
         return False
 
     async def refresh_state(self) -> None:
-        """Refresh device state."""
+        """Refresh device state. BLE devices push notifications over the
+        persistent connection, so this is a no-op for them."""
         if self._ble_address:
-            if await self._ble_connect():
-                await self._ble_send(self._protocol.build_query())
-                await asyncio.sleep(1.0)
             return
 
         if self.supports_cloud and self._cloud:
@@ -754,24 +750,30 @@ class ScentDiffuserDevice:
                 self._notify_state_changed()
 
     async def sync_time(self) -> bool:
-        """Sync device clock to current local time (BLE only)."""
-        if not self._ble_address:
+        """Re-send the time-sync frame on the live connection."""
+        if not self._ble_address or not self._ble_connected:
             return False
-        self._ble_has_synced_time = False
-        return await self._ble_connect()
+        time_sync = self._protocol.build_time_sync()
+        if not time_sync:
+            return True
+        return await self._ble_send(time_sync)
 
     # ------------------------------------------------------------------
     # Startup / Shutdown
     # ------------------------------------------------------------------
 
     async def async_setup(self) -> None:
-        """Initial setup - query state once."""
-        await self.refresh_state()
+        """Start the BLE supervisor task so the connection comes up eagerly."""
+        if self._ble_address:
+            self._ble_stop = False
+            self._ble_supervisor_task = asyncio.ensure_future(self._ble_supervisor())
 
     async def async_shutdown(self) -> None:
         """Clean up resources."""
-        if self._ble_disconnect_task and not self._ble_disconnect_task.done():
-            self._ble_disconnect_task.cancel()
+        self._ble_stop = True
+        self._ble_disconnect_event.set()
+        if self._ble_supervisor_task and not self._ble_supervisor_task.done():
+            self._ble_supervisor_task.cancel()
         if self._ble_client:
             try:
                 if self._ble_client.is_connected:
