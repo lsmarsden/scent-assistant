@@ -150,7 +150,14 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     #     Show the device on discovery card so it's clear what we're adding
-        self.context["title_placeholders"] = {"name": name}
+    #     including the detected family so the BLE local_name (often opaque
+    #     like "dev505" isn't the only hint.
+        if dtype is not None:
+            label = _DEVICE_TYPE_LABELS.get(dtype.value, dtype.value)
+            display = f"{name} ({label})"
+        else:
+            display = name
+        self.context["title_placeholders"] = {"name": display}
 
         if dtype is None:
             self._auto_detect_failed = True
