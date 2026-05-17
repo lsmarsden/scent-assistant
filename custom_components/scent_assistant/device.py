@@ -85,6 +85,7 @@ class ScentDiffuserDevice:
         self._ble_connected = False
         self._ble_lock = asyncio.Lock()
         self._ble_supervisor_task: asyncio.Task | None = None
+        self._ble_poll_task: asyncio.Task | None = None
         self._ble_disconnect_event = asyncio.Event()
         self._ble_stop = False
         self._ble_has_synced_time = False
@@ -386,6 +387,30 @@ class ScentDiffuserDevice:
             backoff = BLE_BACKOFF_INITIAL
             self._ble_disconnect_event.clear()
             await self._ble_disconnect_event.wait()
+
+    async def _ble_poll_loop(self) -> None:
+        """Periodically send the protocol's status poll over the live link.
+
+        Only runs for protocols that declare a poll interval and implement
+        build_poll() (currently AromaWave). Devices that push state changes
+        autonomously (Ascent/GW) leave both at their defaults and no poll
+        task is started."""
+        interval = self._protocol.poll_interval_seconds or 0
+        if interval <= 0:
+            return
+        while not self._ble_stop:
+            await asyncio.sleep(interval)
+            if self._ble_stop:
+                return
+            if not self._ble_connected:
+                continue
+            frame = self._protocol.build_poll()
+            if not frame:
+                continue
+            try:
+                await self._ble_send(frame)
+            except Exception as err:
+                _LOGGER.debug("BLE poll send failed: %s", err)
 
     async def _ble_send(self, data: bytes) -> bool:
         """Send a command via BLE.
@@ -763,10 +788,13 @@ class ScentDiffuserDevice:
     # ------------------------------------------------------------------
 
     async def async_setup(self) -> None:
-        """Start the BLE supervisor task so the connection comes up eagerly."""
+        """Start the BLE supervisor task so the connection comes up eagerly.
+        Also start a poll task for protocols that need periodic polling."""
         if self._ble_address:
             self._ble_stop = False
             self._ble_supervisor_task = asyncio.ensure_future(self._ble_supervisor())
+            if self._protocol.poll_interval_seconds:
+                self._ble_poll_task = asyncio.ensure_future(self._ble_poll_loop())
 
     async def async_shutdown(self) -> None:
         """Clean up resources."""
@@ -774,6 +802,8 @@ class ScentDiffuserDevice:
         self._ble_disconnect_event.set()
         if self._ble_supervisor_task and not self._ble_supervisor_task.done():
             self._ble_supervisor_task.cancel()
+        if self._ble_poll_task and not self._ble_poll_task.done():
+            self._ble_poll_task.cancel()
         if self._ble_client:
             try:
                 if self._ble_client.is_connected:

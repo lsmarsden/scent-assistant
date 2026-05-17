@@ -135,6 +135,13 @@ class BleProtocol(ABC):
     write_char_uuid: str = CHAR_WRITE_UUID
     notify_char_uuid: str = CHAR_NOTIFY_UUID
 
+    # Devices that don't autonomously push state need a periodic poll over
+    # the persistent connection. Overrise `poll_interval_seconds` to a
+    # positive value and implement `build_poll()` to opt in. `build_quer`
+    # is unsuitable for this - some implementations return harmful init
+    # packets that the device treats as a malformed command.
+    poll_interval_seconds: int | None = None
+
     @abstractmethod
     def build_power(self, on: bool) -> bytes:
         """Build power on/off command."""
@@ -142,6 +149,10 @@ class BleProtocol(ABC):
     def build_time_sync(self, now: datetime | None = None) -> bytes | None:
         """Build time synchronisation command. Return None if not supported."""
         return None
+
+    def build_poll(self) -> bytes:
+        """Build a safe periodic status request. Default: no poll."""
+        return b""
 
     @abstractmethod
     def build_query(self) -> bytes:
@@ -1330,6 +1341,9 @@ class AromaWaveProtocol(BleProtocol):
     service_uuid = AROMAWAVE_SERVICE_UUID
     write_char_uuid = AROMAWAVE_CHAR_UUID
     notify_char_uuid = AROMAWAVE_CHAR_UUID
+    # iOS/Android apps poll every 1-3s; 60s is the loosest cadence that still
+    # surfaces button-press changes within a reasonable UX window.
+    poll_interval_seconds = 60
 
     _ORDER_LEN = 20 # bytes between FEEF and EFFF
 
@@ -1351,8 +1365,12 @@ class AromaWaveProtocol(BleProtocol):
         return self._build_envelope(0x000E, 1 if on else 0)
 
     def build_query(self) -> bytes:
-#         The device pushes status notifications without an explicit query
+        # Unused - periodic polling goes through build_poll() instead.
         return b""
+
+    def build_poll(self) -> bytes:
+        # FEEF 05 ... EFFF - the iOS app's periodic status ping.
+        return self._build_envelope(0x0500, 0)
 
     def parse_notification(self, data: bytes) -> dict:
 #         status decoding not yet reverse-engineered; surface nothing
