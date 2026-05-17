@@ -1348,21 +1348,47 @@ class AromaWaveProtocol(BleProtocol):
     _ORDER_LEN = 20 # bytes between FEEF and EFFF
 
     @classmethod
+    def _wrap_envelope(cls, order: bytes) -> bytes:
+        """Wrap a 20-byte order payload in the JSON FEEF...EFFF envelope."""
+        inner_hex = b"FEEF" + order.hex().upper().encode("ascii") + b"EFFF"
+        return (
+            b'{"TYPE":3,"ID":"(null)","TO":"(null)","MSG":"order:'
+            + inner_hex
+            + b'"}'
+        )
+
+    @classmethod
     def _build_envelope(cls, cmd: int, value: int) -> bytes:
         order = bytearray(cls._ORDER_LEN)
         order[0] = (cmd >> 8) & 0xFF
         order[1] = cmd & 0xFF
         order[2] = value & 0xFF
-        inner_hex = b"FEEF" + order.hex().upper().encode("ascii") + b"EFFF"
-        envelope = (
-            b'{"TYPE":3,"ID":"(null)","TO":"(null)","MSG":"order:'
-            + inner_hex
-            + b'"}'
-        )
-        return envelope
+        return cls._wrap_envelope(order)
 
     def build_power(self, on: bool) -> bytes:
         return self._build_envelope(0x000E, 1 if on else 0)
+
+    def build_time_sync(self, now: datetime | None = None) -> bytes:
+        """FEEF 00 07 [YYYY-BE] [MM] [DD] [HH] [MM] [SS] [CS] EFFF.
+
+        Empirically required before the device accepts power/control writes -
+        without this, our writes complete with no BLE error but the diffuser
+        doesn't actuate. MAtches the iOS app's set-clock frame at +2.3s of
+        every cold-start session."""
+        if now is None:
+            now = datetime.now()
+        order = bytearray(self._ORDER_LEN)
+        order[0] = 0x00 # write attribute
+        order[1] = 0x07 # attribute ID = clock
+        order[2] = (now.year >> 8) & 0xFF
+        order[3] = now.year & 0xFF
+        order[4] = now.month
+        order[5] = now.day
+        order[6] = now.hour
+        order[7] = now.minute
+        order[8] = now.second
+        order[9] = (now.microsecond // 10000) & 0xFF
+        return self._wrap_envelope(order)
 
     def build_query(self) -> bytes:
         # Unused - periodic polling goes through build_poll() instead.
