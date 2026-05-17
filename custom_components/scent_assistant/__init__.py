@@ -133,7 +133,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if connection_mode == "ble" and device._protocol.build_query():
         async def _periodic_ble_poll(now=None) -> None:
             try:
-                await device._refresh_state()
+                await device.refresh_state()
             except Exception as err:
                 _LOGGER.debug("BLE state poll failed (will retry): %s", err)
 
