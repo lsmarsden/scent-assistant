@@ -38,7 +38,6 @@ async def async_setup_entry(
         # legacy schedule fields the AromaLink/Tuya entities write
         entities.append(GwWorkDurationNumber(device, entry))
         entities.append(GwPauseDurationNumber(device, entry))
-        entities.append(WorkDurationNumber(device, entry))
         entities.append(GwGradeNumber(device, entry))
     else:
         entities.append(WorkDurationNumber(device, entry))

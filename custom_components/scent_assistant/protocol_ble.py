@@ -1331,7 +1331,7 @@ class AromaWaveProtocol(BleProtocol):
     (0x0A00, 0x0500, ...) appear to be status pings - not modelled here.
     """
 
-    device_type = DeviceType.AromaWave
+    device_type = DeviceType.AROMA_WAVE
     service_uuid = AROMAWAVE_SERVICE_UUID
     write_char_uuid = AROMAWAVE_CHAR_UUID
     notify_char_uuid = AROMAWAVE_CHAR_UUID
