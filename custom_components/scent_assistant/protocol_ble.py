@@ -31,6 +31,7 @@ from .const import (
     SM_GW_DP_CUSTOMIZE_GEAR, SM_GW_DP_REMARK,
     SM_GW_PASSWORD_MARKER, SM_GW_PASSWORD_OK_BYTE,
     SM_GW_INIT_PACKET, SM_GW_HEARTBEAT_HEX, SM_GW_XOR_DICT,
+    AROMAWAVE_MFR_ID, AROMAWAVE_SERVICE_UUID, AROMAWAVE_CHAR_UUID,
     BLE_NAME_PATTERNS,
     TUYA_HEADER, TUYA_VERSION,
     TUYA_CMD_DP_WRITE, TUYA_CMD_DP_REPORT, TUYA_CMD_QUERY, TUYA_CMD_TIME_SYNC,
@@ -1312,6 +1313,58 @@ class ScentMarketingGwXorProtocol(ScentMarketingGwProtocol):
 
 
 # ---------------------------------------------------------------------------
+# AromaWave (Aromawave Ultra Pro) - JSON + FEEF/EFFF hex frames
+# ---------------------------------------------------------------------------
+
+class AromaWaveProtocol(BleProtocol):
+    """Aromawave Ultra Pro BLE protocol.
+
+    Every write is a UTF-8 JSON envelope of the form
+
+    {"TYPE":3,"ID","(null)","TO":"(null)","MSG":"order:FEEF<42 hex>EFFF"}
+
+    The inner 20-byte order frame carries a 2-byte command id and a value:
+
+    FEEF [cmd:u16-be] [value:1] [zero-pad to 20 bytes] EFFF
+
+    Power: cmd=0x000E, value=0x00 (off) / 0x01 (on). Other commands seen in captures
+    (0x0A00, 0x0500, ...) appear to be status pings - not modelled here.
+    """
+
+    device_type = DeviceType.AromaWave
+    service_uuid = AROMAWAVE_SERVICE_UUID
+    write_char_uuid = AROMAWAVE_CHAR_UUID
+    notify_char_uuid = AROMAWAVE_CHAR_UUID
+
+    _ORDER_LEN = 20 # bytes between FEEF and EFFF
+
+    @classmethod
+    def _build_envelope(cls, cmd: int, value: int) -> bytes:
+        order = bytearray(cls._ORDER_LEN)
+        order[0] = (cmd >> 8) & 0xFF
+        order[1] = cmd & 0xFF
+        order[2] = value & 0xFF
+        inner_hex = b"FEEF" + order.hex().upper().encode("ascii") + b"EFFF"
+        envelope = (
+            b'{"TYPE":3,"ID":"(null)","TO":"(null)","MSG":"order:'
+            + inner_hex
+            + b'"}'
+        )
+        return envelope
+
+    def build_power(self, on: bool) -> bytes:
+        return self._build_envelope(0x000E, 1 if on else 0)
+
+    def build_query(self) -> bytes:
+#         The device pushes status notifications without an explicit query
+        return b""
+
+    def parse_notification(self, data: bytes) -> dict:
+#         status decoding not yet reverse-engineered; surface nothing
+#         rather than guess. power state will mirror last write
+        return {}
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -1338,6 +1391,8 @@ def get_protocol(
         return ScentMarketingGwProtocol(tuya_dp_mode=tuya)
     elif device_type == DeviceType.SCENT_MARKETING_GW_XOR:
         return ScentMarketingGwXorProtocol(mac=mac, tuya_dp_mode=tuya)
+    elif device_type == DeviceType.AROMA_WAVE:
+        return AromaWaveProtocol()
     raise ValueError(f"Unknown device type: {device_type}")
 
 
@@ -1421,6 +1476,9 @@ def protocol_from_services(client_services) -> DeviceType | None:
     if SCENTIMENT_SERVICE_UUID in service_uuids:
         return DeviceType.SCENTIMENT
 
+    if AROMAWAVE_SERVICE_UUID in service_uuids:
+        return DeviceType.AROMA_WAVE
+
 #     FFF0 shared by Aroma-Link, Tuya BLE, AK family. only AK
 # exposes FFF6 underneath, others use FFF2/FFF1.
     if SERVICE_UUID in service_uuids:
@@ -1442,13 +1500,18 @@ def detect_device_type(
     """Detect device type from advertisement.
 
     Detection priority:
-      1. Manufacturer-specific data for Scent Marketing families (most
-         reliable — the Android app uses this exclusively).
+      1. Manufacturer-specific data for Scent Marketing + ARomawave (most
+         reliable — vendor apps use this exclusively).
       2. BLE local-name prefix patterns for the other families.
     """
     sm_type = _detect_scent_marketing(advertisement_data)
     if sm_type is not None:
         return sm_type
+
+    if advertisement_data is not None:
+        mfr_data = getattr(advertisement_data, "manufacturer_data", None) or {}
+        if AROMAWAVE_MFR_ID in mfr_data:
+            return DeviceType.AROMA_WAVE
 
     if not ble_name:
         return None

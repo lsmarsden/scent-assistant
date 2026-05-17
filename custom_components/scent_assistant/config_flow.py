@@ -39,6 +39,7 @@ _DEVICE_TYPE_LABELS: dict[str, str] ={
     DeviceType.AROMA_LINK.value: "Aroma-Link / JCloud / Cavit / similar",
     DeviceType.TUYA_BLE.value: "ShinePick / Tuya BLE (BT-ivy*)",
     DeviceType.SCENTIMENT.value: "Scentiment Diffuser Air 2",
+    DeviceType.AROMA_WAVE.value: "Aromawave Ultra Pro (AE30, JSON+FEEF/EFFF)",
 }
 
 class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

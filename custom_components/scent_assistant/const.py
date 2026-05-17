@@ -14,7 +14,7 @@ class DeviceType(StrEnum):
     SCENT_MARKETING_AK = "scent_marketing_ak"          # Scent Marketing app, AK family (FFF0 service, simple byte commands)
     SCENT_MARKETING_GW = "scent_marketing_gw"          # Scent Marketing app, GW family (EE01 service, framed DP protocol)
     SCENT_MARKETING_GW_XOR = "scent_marketing_gw_xor"  # Scent Marketing app, GW family with XOR-encrypted JSON payload
-
+    AROMA_WAVE = "aroma_wave"                # Aromawave Ultra Pro (BLE, JSON+FEEF/EFFF hex frames)
 
 # ---------------------------------------------------------------------------
 # BLE UUIDs
@@ -85,6 +85,15 @@ BLE_NAME_PATTERNS = {
 SM_MFR_ID_AK = 22851       # 0x5943 — AK family
 SM_MFR_ID_GW = 17932       # 0x460C — GW family (BLE/WiFi/Cellular)
 SM_MFR_ID_GW_ALT = 61441   # 0xF001 — GW family alternate ID (WiFi-routed devices)
+
+# Aromawave Ultra Pro - separate vendor app (Aromwave). Uses AE-prefixed
+# custom service UUIDs and JSON-wrapped FEEF/EFFF hex frames
+AROMAWAVE_MFR_ID = 0xC599 # 50585
+AROMAWAVE_SERVICE_UUID = "0000ae30-0000-1000-8000-00805f9b34fb"
+# Single chaaracteristic write+notify on AE10 (handle 0x0088 in PacketLogger
+# captures). Unverified against a fresh GATT discovery - adjust if writes
+# fail with 'charaacteristic not found'
+AROMAWAVE_CHAR_UUID = "0000ae10-0000-1000-8000-00805f9b34fb"
 
 # GW manufacturer-data leading byte determines the encoding sub-variant.
 # 00 / unknown        → plain binary DP protocol
