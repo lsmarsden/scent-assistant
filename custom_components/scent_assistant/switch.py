@@ -144,7 +144,8 @@ class DiffuserLampSwitch(SwitchEntity):
         if not self._device.available:
             return False
         if self._device.device_type in GW_TYPES:
-            return self._device.has_observed_dp(SM_GW_DP_LIGHT)
+            # prototype
+            return self._device.state.light_on is not None
         return True
 
     async def async_turn_on(self, **kwargs) -> None:
