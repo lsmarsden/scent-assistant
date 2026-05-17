@@ -476,6 +476,9 @@ class ScentDiffuserDevice:
         if "light_on" in updates:
             self._state.light_on = updates["light_on"]
             changed = True
+        if "grade" in updates:
+            self._state.grade = updates["grade"]
+            changed = True
         if "device_name" in updates:
             self._state.device_name = updates["device_name"]
             changed = True
@@ -652,7 +655,12 @@ class ScentDiffuserDevice:
                     start_hour=s_h, start_minute=s_m, end_hour=e_h, end_minute=e_m,
                     enabled=enabled, work_seconds=work, pause_seconds=pause,
                 )
-                cmd = self._protocol.build_schedule([slot], weekday_mask=weekday_mask)
+                #  preserve device's current grade (1-5); fall back to 1
+                # if we haven;t observed state push yet
+                grade = self._state.grade if self._state.grade else 1
+                cmd = self._protocol.build_schedule(
+                    [slot], weekday_mask=weekday_mask, grade=grade,
+                )
             elif isinstance(self._protocol, ScentMarketingAkProtocol):
                 slot = ScheduleSlot(
                     start_hour=s_h, start_minute=s_m, end_hour=e_h, end_minute=e_m,

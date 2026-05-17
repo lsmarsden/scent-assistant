@@ -84,6 +84,7 @@ class DiffuserState:
     oil_remaining_ml: int | None = None   # raw remaining volume in ml
     oil_total_ml: int | None = None   # bottle capacity in ml
     light_on: bool | None = None       # auxiliary LED state
+    grade: int | None = None            # GW spray grade 1-5 (0 = customise mode)
     device_name: str | None = None     # user-set device name (DP 6)
     password_required: bool | None = None  # GW device demands password auth
     firmware_version: str | None = None    # PCB+MCU version string
@@ -907,44 +908,39 @@ class ScentMarketingGwProtocol(BleProtocol):
     # ------------------------------------------------------------------
 
     def build_schedule(self, slots: list["ScheduleSlot"],
-                       weekday_mask: int = 0x7F) -> bytes:
-        """Port of `GwBleCtrl.handleTasksAndPower()` for single-nozzle
-        devices (modelNode != 23).
+                       weekday_mask: int = 0x7F,
+                       grade: int = 1) -> bytes:
+        """Build a Dp-4 MODE_TASKS frame.
 
-        Layout (everything in big-endian):
+        Layout verified against packetlogger captures (everything big-endian):
 
-            FF NN                            frame header + DP count
+            FF NN                            frame header + tx counter
             00 04 AF <len:u16>               DP 4 header
-            01 00                            sub-version / reserved
+            01 01                            sub-version
             00 <task_count>                  task count u16
             for each task: 7 bytes
                 [enabled<<7 | weekday_mask:7] [start_h] [start_m]
-                [end_h] [end_m] [spray=1] [power=intensity]
-            01 64 00 <countdown_power>       reserved + countdown sentinel
-            02 01 2C <quick_power>           quick-fragrance sentinel
-            (optionally) 00 0F AF 00 0C ...  customize-gear block
+                [end_h] [end_m] [01] [01]
+            01 64 00 <grade>       countdown(?) + global grade
+            02 01 <burst_dur> 01           quick-fragrance sentinel
 
-        We do not currently emit the customize-gear block (we leave it
-        for users who explicitly opt-in to per-slot custom timings via
-        the integration's existing schedule service).
+            ``grade`` is 1-5 in 24-hour mode; 0 means 'customise mode active'
         """
         task_count = len(slots)
         payload = bytearray()
-        payload += bytes([0x01, 0x00])                # sub-version
+        payload += bytes([0x01, 0x01])                # sub-version
         payload += bytes([0x00, task_count & 0xFF])   # task count u16
         for slot in slots:
             day_bits = weekday_mask & 0x7F
             flags = day_bits | (0x80 if slot.enabled else 0x00)
-            power = slot.work_seconds if slot.work_seconds <= 0xFF else 0xFF
             payload += bytes([
                 flags & 0xFF,
                 slot.start_hour & 0xFF, slot.start_minute & 0xFF,
                 slot.end_hour & 0xFF, slot.end_minute & 0xFF,
-                0x01,                       # spray = 1
-                power & 0xFF,
+                0x01, 0x01,
             ])
-        payload += bytes([0x01, 0x64, 0x00, 0x00])    # countdown sentinel
-        payload += bytes([0x02, 0x01, 0x2C, 0x00])    # quick-fragrance sentinel
+        payload += bytes([0x01, 0x64, 0x00, grade & 0xFF])
+        payload += bytes([0x02, 0x01, 0x28, 0x01])    # quick-fragrance sentinel
         dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, bytes(payload))
         return self._build_frame([dp4])
 
@@ -1043,7 +1039,13 @@ class ScentMarketingGwProtocol(BleProtocol):
 
     def _dispatch_composite(self, dp_id: int, type_tag: int, payload: bytes, result: dict) -> None:
         """Composite-DP dispatcher shared by binary + Tuya parsers."""
-        if dp_id == SM_GW_DP_VERSION:
+        if dp_id == SM_GW_DP_MODE_TASKS and len(payload) >= 4:
+            # Grade lives in the trailing `01 64 00 GG` countdown sentinel,
+            # 8 bytes from the end of the payload (followed by the
+            # quick-fragrance snetinel `02 01 NN MM`)
+            if len(payload) >= 8:
+                result["grade"] = payload[-5] & 0xFF
+        elif dp_id == SM_GW_DP_VERSION:
             result["firmware_version"] = payload.split(b"\x00", 1)[0].decode("ascii", errors="replace")
         elif dp_id == SM_GW_DP_NAME:
             text = payload.rstrip(b"\x00").decode("utf-8", errors="replace").strip()
