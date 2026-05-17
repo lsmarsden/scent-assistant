@@ -8,11 +8,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, DeviceType
+from .const import (
+    DOMAIN,
+    DeviceType,
+    SM_GW_DP_MODE_TASKS,
+)
 from .device import ScentDiffuserDevice
 
 _LOGGER = logging.getLogger(__name__)
 
+GW_TYPES = {DeviceType.SCENT_MARKETING_GW, DeviceType.SCENT_MARKETING_GW_XOR}
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -26,11 +31,14 @@ async def async_setup_entry(
         async_add_entities([ScentimentLevelNumber(device, entry)])
         return
 
-    async_add_entities([
+    entities: list[NumberEntity] = [
         WorkDurationNumber(device, entry),
         PauseDurationNumber(device, entry),
-    ])
+    ]
+    if device.device_type in GW_TYPES:
+        entities.append(GwGradeNumber(device, entry))
 
+    async_add_entities(entities)
 
 class WorkDurationNumber(NumberEntity):
     """Spray work duration in seconds."""
@@ -100,6 +108,45 @@ class PauseDurationNumber(NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_pause_duration(int(value))
+
+
+class GwGradeNumber(NumberEntity):
+    """Spray grade (1-5) for Scent Marketing GW devices.
+
+    Setting the grade re-emits a DP-4 frame with an all-day all-week task
+    and the new grade in the trailing sentinel - matching the iOS app's
+    "24-hour mode" behaviour.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Grade"
+    _attr_icon = "mdi:speedometer"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 5
+    _attr_native_step = 1
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
+        self._device = device
+        self._attr_unique_id = f"{device.unique_id}_grade"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float | None:
+        return self._device.state.grade
+
+    @property
+    def available(self) -> bool:
+        return self._device.available and self._device.has_observed_dp(SM_GW_DP_MODE_TASKS)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._device.set_grade(int(value))
 
 
 class ScentimentLevelNumber(NumberEntity):

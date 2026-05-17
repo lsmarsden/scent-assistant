@@ -553,6 +553,26 @@ class ScentDiffuserDevice:
                 return True
         return False
 
+    async def set_grade(self, grade: int) -> bool:
+        """Set the GW spray grade (1-5). Re-emits DP-4 with an all-day
+        all-week task and the requested grade in the sentinel."""
+        if not self._ble_address:
+            return False
+        if not isinstance(self._protocol, ScentMarketingGwProtocol):
+            return False
+        grade = max(1, min(5, int(grade)))
+        slot = ScheduleSlot(
+            start_hour=0, start_minute=0,
+            end_hour=23, end_minute=59,
+            enabled=True
+        )
+        cmd = self._protocol.build_schedule([slot], weekday_mask=0x7F, grade=grade)
+        if await self._ble_execute(cmd):
+            self._state.grade = grade
+            self._notify_state_changed()
+            return True
+        return False
+
     async def set_lamp(self, on: bool) -> bool:
         """Toggle auxiliary lamp (Scent Marketing AK lamp-bit, GW DP-11 light)."""
         if not self._ble_address:
