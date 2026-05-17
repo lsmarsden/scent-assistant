@@ -13,7 +13,12 @@ from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, DeviceType
+from .const import (
+    DOMAIN,
+    DeviceType,
+    SM_GW_DP_BATTERY,
+    SM_GW_DP_OIL,
+)
 from .device import ScentDiffuserDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,7 +121,11 @@ class DiffuserBatterySensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available and self._device.state.battery is not None
+        if not self._device.available:
+            return False
+        if self._device.device_type in GW_TYPES:
+            return self._device.has_observed_dp(SM_GW_DP_BATTERY)
+        return self._device.state.battery is not None
 
 
 class DiffuserOilSensor(SensorEntity):
@@ -154,7 +163,11 @@ class DiffuserOilSensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available and self._device.state.oil_remaining is not None
+        if not self._device.available:
+            return False
+        if self._device.device_type in GW_TYPES:
+            return self._device.has_observed_dp(SM_GW_DP_OIL)
+        return self._device.state.oil_remaining is not None
 
 
 class DiffuserDetectionDiagnostic(SensorEntity):

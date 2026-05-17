@@ -761,6 +761,12 @@ class ScentMarketingGwProtocol(BleProtocol):
         # frame. The wire layout is the same; only the type-tag-driven
         # length decoding differs.
         self._tuya_dp_mode = tuya_dp_mode
+        #     DP IDs we've seen the device push at least once. Used by the HA
+        # entity layer to mark optional features unavailable until the
+        #  device has actually advertised them - different OEM rebrands of
+        #  the same Scent Marketing GW family ship different feature sets.
+        self.observed_dps: set[int] = set()
+
 
     # ------------------------------------------------------------------
     # Frame builders

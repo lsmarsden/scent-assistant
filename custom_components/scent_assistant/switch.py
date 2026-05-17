@@ -8,8 +8,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, DeviceType
+from .const import (
+    DOMAIN,
+    DeviceType,
+    SM_GW_DP_LIGHT,
+    SM_GW_DP_LOCK,
+)
 from .device import ScentDiffuserDevice
+
+GW_TYPES = {DeviceType.SCENT_MARKETING_GW, DeviceType.SCENT_MARKETING_GW_XOR}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +106,11 @@ class DiffuserLockSwitch(SwitchEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available
+        if not self._device.available:
+            return False
+        if self._device.device_type in GW_TYPES:
+            return self._device.has_observed_dp(SM_GW_DP_LOCK)
+        return True
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_lock(True)
@@ -130,7 +141,11 @@ class DiffuserLampSwitch(SwitchEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.available
+        if not self._device.available:
+            return False
+        if self._device.device_type in GW_TYPES:
+            return self._device.has_observed_dp(SM_GW_DP_LIGHT)
+        return True
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_lamp(True)

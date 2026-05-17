@@ -185,6 +185,15 @@ class ScentDiffuserDevice:
     def supports_fan(self) -> bool:
         return self._protocol.supports_fan()
 
+    def has_observed_dp(self, dp_id: int) -> bool:
+        """For GW devices, return True if the given DP has been pushed by the
+        device at least once. Non-GW protocols don't have a DP catalogue and
+        always return True (entities gate on state-field presence instead)"""
+        observed = getattr(self._protocol, "observed_dps", None)
+        if observed is None:
+            return True
+        return dp_id in observed
+
     @property
     def supports_cloud(self) -> bool:
         return self._cloud is not None and self._cloud_device_id is not None
