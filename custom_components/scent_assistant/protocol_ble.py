@@ -950,6 +950,47 @@ class ScentMarketingGwProtocol(BleProtocol):
         dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, bytes(payload))
         return self._build_frame([dp4])
 
+    # DP-15 customise: device-reported limits (min/max for both axes)
+    # The iOS app rewrites these unchanged on every customise write, so we
+    # do the same - the device echoes them back as part of state
+    _CUSTOMIZE_LIMITS = bytes([
+        0x00, 0x05, 0x00, 0x23,  # work min=5, max=35
+        0x00, 0x3C, 0x01, 0x2C,  # pause min=60, max=300
+    ])
+
+    def build_customize(self, work_seconds: int, pause_seconds: int,
+                        grade: int = 0) -> bytes:
+        """Build a Dp-4 (grade reset) + DP-15 (customise work/pause) frame
+
+        Customise mode is mutually exclusive with the grade selector on
+        the device side, so we emit DP-4 with grade=0 to match the iOS app's behaviour
+        otherwse the device may silently revert"""
+        slot = ScheduleSlot(
+            start_hour=0, start_minute=0,
+            end_hour=23, end_minute=59,
+            enabled=True
+        )
+    #     Build DP-4 inline (without wrapping in its own frame) so we can
+    #  ship both DPs together
+        task_payload = bytearray()
+        task_payload += bytes([0x01, 0x01, 0x00, 0x01])
+        task_payload += bytes([
+            0x7F | 0x80,
+            slot.start_hour, slot.start_minute,
+            slot.end_hour, slot.end_minute,
+            0x01, 0x01,
+        ])
+        task_payload += bytes([0x01, 0x64, 0x00, grade & 0xFF])
+        task_payload += bytes([0x02, 0x01, 0x28, 0x01])
+        dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, bytes(task_payload))
+        cust_payload = bytes([
+            (work_seconds >> 8) & 0xFF, work_seconds & 0xFF,
+            (pause_seconds >> 8) & 0xFF, pause_seconds & 0xFF,
+        ]) + self._CUSTOMIZE_LIMITS
+        dp15 = self._build_composite_dp(SM_GW_DP_CUSTOMIZE_GEAR, cust_payload)
+        return self._build_frame([dp4, dp15])
+
+
     # ------------------------------------------------------------------
     # Notification parsing
     # ------------------------------------------------------------------
@@ -1082,6 +1123,11 @@ class ScentMarketingGwProtocol(BleProtocol):
                 pct_byte = payload[1] & 0xFF
                 if pct_byte != 0xE0:
                     result["oil_remaining"] = max(0, min(100, int(pct_byte / 2.55)))
+        elif dp_id == SM_GW_DP_CUSTOMIZE_GEAR and len(payload) >= 4:
+        #     DP-15 customise: bytes 0-3 = (work_sec, pause_sec) u16-be
+        # Bytes 4-11 are device-reported (min, max) limits we ignore.
+            result["work_seconds"] = (payload[0] << 8) | payload[1]
+            result["pause_seconds"] = (payload[2] << 8) | payload[3]
         elif dp_id == SM_GW_DP_LIGHT and len(payload) >= 2:
             light_type = payload[0] & 0xFF
             light_status = payload[1] & 0xFF

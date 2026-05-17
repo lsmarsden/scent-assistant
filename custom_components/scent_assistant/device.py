@@ -553,6 +553,23 @@ class ScentDiffuserDevice:
                 return True
         return False
 
+    async def set_customize(self, work_seconds: int, pause_seconds: int) -> bool:
+        """Set GW customise mode work/pause durations (DP-15)"""
+        if not self._ble_address:
+            return False
+        if not isinstance(self._protocol, ScentMarketingGwProtocol):
+            return False
+        work = max(5, min(35, int(work_seconds)))
+        pause = max(60, min(300, int(pause_seconds)))
+        cmd = self._protocol.build_customize(work, pause)
+        if await self._ble_execute(cmd):
+            self._state.work_seconds = work
+            self._state.pause_seconds = pause
+            self._state.grade = 0
+            self._notify_state_changed()
+            return True
+        return False
+
     async def set_grade(self, grade: int) -> bool:
         """Set the GW spray grade (1-5). Re-emits DP-4 with an all-day
         all-week task and the requested grade in the sentinel."""
