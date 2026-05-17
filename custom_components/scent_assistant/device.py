@@ -345,6 +345,17 @@ class ScentDiffuserDevice:
         if services is None:
             return
 
+        # One-time GATT dump per device lifetime so we can diagnose unknown
+        # protocols / unverified UUIDs (e.g. AromaWave) without asking for
+        # another PacketLogeger capture.
+        for s in services:
+            _LOGGER.info("GATT service %s", s.uuid)
+            for c in s.characteristics:
+                _LOGGER.info(
+                    "  char %s handle=0x%04X props=%s",
+                    c.uuid, c.handle, ",".join(c.properties),
+                )
+
         detected = protocol_from_services(services)
         self._protocol_locked = True
         if detected is None or detected == self._device_type:
