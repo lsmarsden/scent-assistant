@@ -124,25 +124,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             timedelta(seconds=CLOUD_POLL_INTERVAL_SECONDS),
         )
 
-    # BLE devices in the Scent Marketing / AromaLink / Tuya / AK families
-    # only push state in response to a host write. External changes
-    # (manual buttons, manufacturer-app commands) are invisible to HA
-    # otherwise. Poll periodically by sending the protocol's query frame.
-    # Skipped for protocols whose build_query() returns b"" (Scentiment
-    # pushes autonomously; AromaWave status decoding isn't implemented).
-    if connection_mode == "ble" and device._protocol.build_query():
-        async def _periodic_ble_poll(now=None) -> None:
-            try:
-                await device.refresh_state()
-            except Exception as err:
-                _LOGGER.debug("BLE state poll failed (will retry): %s", err)
-
-        device._unsub_ble_poll = async_track_time_interval(
-            hass,
-            _periodic_ble_poll,
-            timedelta(seconds=60),
-        )
-
     # Register services (once for all entries)
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
         async def handle_set_schedule(call: ServiceCall) -> None:
@@ -207,7 +188,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unload_ok:
         device: ScentDiffuserDevice = hass.data[DOMAIN].pop(entry.entry_id)
-        for attr in ("_unsub_cloud_poll", "_unsub_ble_poll"):
+        for attr in ("_unsub_cloud_poll",):
             unsub = getattr(device, attr, None)
             if unsub is not None:
                 unsub()
