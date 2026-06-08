@@ -1369,12 +1369,13 @@ class AromaWaveProtocol(BleProtocol):
         return self._build_envelope(0x000E, 1 if on else 0)
 
     def build_time_sync(self, now: datetime | None = None) -> bytes:
-        """FEEF 00 07 [YYYY-BE] [MM] [DD] [HH] [MM] [SS] [CS] EFFF.
+        """FEEF 00 07 [YYYY-BE] [MM] [DD] [WD] [HH] [MM] [SS] EFFF.
 
         Empirically required before the device accepts power/control writes -
         without this, our writes complete with no BLE error but the diffuser
-        doesn't actuate. MAtches the iOS app's set-clock frame at +2.3s of
-        every cold-start session."""
+        doesn't actuate. Byte at offset 6 is ISO weekday (1=Mon..7=Sun),
+        then hour, minute, second. Cross-checked against three iOS-app
+        captures - matches byte-for-byte."""
         if now is None:
             now = datetime.now()
         order = bytearray(self._ORDER_LEN)
@@ -1384,10 +1385,10 @@ class AromaWaveProtocol(BleProtocol):
         order[3] = now.year & 0xFF
         order[4] = now.month
         order[5] = now.day
-        order[6] = now.hour
-        order[7] = now.minute
-        order[8] = now.second
-        order[9] = (now.microsecond // 10000) & 0xFF
+        order[6] = now.isoweekday()
+        order[7] = now.hour
+        order[8] = now.minute
+        order[9] = now.second
         return self._wrap_envelope(order)
 
     def build_query(self) -> bytes:
