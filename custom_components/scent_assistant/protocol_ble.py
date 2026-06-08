@@ -62,6 +62,19 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @dataclass
+class AromaWaveMode:
+    """One AromaWave scheduled mode (the device has several; we expose mode 1)."""
+
+    enabled: bool | None = None
+    start_hour: int | None = None
+    start_minute: int | None = None
+    end_hour: int | None = None
+    end_minute: int | None = None
+    work_seconds: int | None = None
+    pause_seconds: int | None = None
+    weekday_mask: int | None = None   # bit per day, bit 0 = Mon, bit 6 = Sun
+
+@dataclass
 class DiffuserState:
     """Represents the current state of a diffuser."""
 
@@ -89,7 +102,8 @@ class DiffuserState:
     device_name: str | None = None     # user-set device name (DP 6)
     password_required: bool | None = None  # GW device demands password auth
     firmware_version: str | None = None    # PCB+MCU version string
-
+    #AromaWave: per-mode schedule, keyed by 1-based mode index
+    aromawave_modes: dict[int, AromaWaveMode] = field(default_factory=dict)
 
 @dataclass
 class ScheduleSlot:
@@ -1386,6 +1400,50 @@ class AromaWaveProtocol(BleProtocol):
     def build_power(self, on: bool) -> bytes:
         return self._build_envelope(0x000E, 1 if on else 0)
 
+    def build_mode_schedule(
+            self,
+            mode: int,
+            start_hour: int,
+            start_minute: int,
+            end_hour: int,
+            end_minute: int,
+            work_seconds: int,
+            pause_seconds: int,
+            enabled: bool,
+    ) -> bytes:
+        """FEEF 00 18 00 [mode] [SH] [SM] [EH] [EM] [WS_BE2] [PS_BE2] 05 0A [en] 00 00 00 00 FF EFFF."""
+        order = bytearray(self._ORDER_LEN)
+        order[0] = 0x00
+        order[1] = 0x18
+        order[2] = 0x00
+        order[3] = mode & 0xFF
+        order[4] = start_hour & 0xFF
+        order[5] = start_minute & 0xFF
+        order[6] = end_hour & 0xFF
+        order[7] = end_minute & 0xFF
+        order[8] = (work_seconds >> 8) & 0xFF
+        order[9] = work_seconds & 0xFF
+        order[10] = (pause_seconds >> 8) & 0xFF
+        order[11] = pause_seconds & 0xFF
+        order[12] = 0x05
+        order[13] = 0x0A
+        order[14] = 0x01 if enabled else 0x00
+        # bytes 15-18 zero-padding
+        order[19] = 0xFF
+        return self._wrap_envelope(order)
+
+    def build_mode_weekday(self, mode: int, weekday_mask: int) -> bytes:
+        """FEEF 00 14 00 [mode] [weekday_mask] 00... EFFF (sent before mode_schedule)."""
+        order = bytearray(self._ORDER_LEN)
+        order[0] = 0x00
+        order[1] = 0x14
+        order[2] = 0x00
+        order[3] = mode & 0xFF
+        order[4] = weekday_mask & 0xFF
+        return self._wrap_envelope(order)
+
+
+
     def build_time_sync(self, now: datetime | None = None) -> bytes:
         """FEEF 00 07 [YYYY-BE] [MM] [DD] [WD] [HH] [MM] [SS] EFFF.
 
@@ -1526,12 +1584,31 @@ class AromaWaveProtocol(BleProtocol):
         if op == 0x00 and len(inner) >= 3:
             attr = inner[1]
             if attr == 0x0E:
-                # Power state: 00 0E [value]
+                # Power: 00 0E [value]
                 result["power"] = inner[2] == 1
                 result["phase"] = "idle" if result["power"] else "off"
                 return
-        # Other ops (0x05 ping responses, 0x18 mode schedule, etc.) carry
-        # state we haven't decoded yet. Log for triage rather than swallow.
+            if attr == 0x14 and len(inner) >= 5:
+                # Weekday mask: 00 14 00 [mode] [mask]
+                mode = inner[3]
+                result.setdefault("aromawave_mode_updates", {}).setdefault(mode, {})["weekday_mask"] = inner[4]
+                return
+            if attr == 0x18 and len(inner) >= 15:
+                # Mode schedule: 00 18 00 [mode] [SH][SM][EH][EM] [WS:BE2] [PS:BE2] 05 0A [enabled] ...
+                mode = inner[3]
+                updates = {
+                    "start_hour": inner[4],
+                    "start_minute": inner[5],
+                    "end_hour": inner[6],
+                    "end_minute": inner[7],
+                    "work_seconds": (inner[8] << 8) | inner[9],
+                    "pause_seconds": (inner[10] << 8) | inner[11],
+                    "enabled": inner[14] == 1,
+                }
+                result.setdefault("aromawave_mode_updates", {}).setdefault(mode, {}).update(updates)
+                return
+        # Other ops (0x05 ping responses with bulk state, etc.) carry data
+        # we haven't decoded yet. Log for triage rather than swallow.
         _LOGGER.debug("AromaWave: undecoded inner frame op=0x%02X len=%d %s",
                       op, len(inner), inner.hex())
 

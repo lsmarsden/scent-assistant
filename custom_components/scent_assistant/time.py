@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DeviceType
 from .device import ScentDiffuserDevice
+from .switch import AromaWaveModeSwitch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,6 +25,12 @@ async def async_setup_entry(
     device: ScentDiffuserDevice = hass.data[DOMAIN][entry.entry_id]
     if device.device_type == DeviceType.SCENTIMENT:
         return
+
+    if device.device_type == DeviceType.AROMA_WAVE:
+        async_add_entities([
+            AromaWaveModeStartTime(device, entry, mode_idx=1),
+            AromaWaveModeEndTime(device, entry, mode_idx=1),
+        ])
 
     async_add_entities([
         DiffuserStartTime(device, entry),
@@ -111,3 +118,70 @@ class DiffuserEndTime(TimeEntity):
             work_seconds=self._device.state.work_seconds or 10,
             pause_seconds=self._device.state.pause_seconds or 120,
         )
+
+class AromaWaveModeStartTime(TimeEntity):
+    """Start time for an AromaWave scheduled mode."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:clock-start"
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
+        self._device = device
+        self._mode_idx = mode_idx
+        self._attr_name = f"Mode {mode_idx} start time"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_start"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> time | None:
+        mode = self._device.state.aromawave_modes.get(self._mode_idx)
+        if mode is None or mode.start_hour is None or mode.start_minute is None:
+            return None
+        return time(mode.start_hour, mode.start_minute)
+
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    async def async_set_value(self, value: time) -> None:
+        await self._device.set_aromawave_mode(
+            self._mode_idx, start_hour=value.hour, start_minute=value.minute,
+        )
+
+class AromaWaveModeEndTime(TimeEntity):
+    """End time for an AromaWave scheduled mode."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:clock-end"
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
+        self._device = device
+        self._mode_idx = mode_idx
+        self._attr_name = f"Mode {mode_idx} end time"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_end"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> time | None:
+        mode = self._device.state.aromawave_modes.get(self._mode_idx)
+        if mode is None or mode.end_hour is None or mode.end_minute is None:
+            return None
+        return time(mode.end_hour, mode.end_minute)
+
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    async def async_set_value(self, value: time) -> None:
+        await self._device.set_aromawave_mode(
+            self._mode_idx, end_hour=value.hour, end_minute=value.minute,
+        )
+

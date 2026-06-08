@@ -37,6 +37,9 @@ async def async_setup_entry(
         entities.append(GwWorkDurationNumber(device, entry))
         entities.append(GwPauseDurationNumber(device, entry))
         entities.append(GwGradeNumber(device, entry))
+    elif device.device_type == DeviceType.AROMA_WAVE:
+        entities.append(AromaWaveModeWorkNumber(device, entry, mode_idx=1))
+        entities.append(AromaWaveModePauseNumber(device, entry, mode_idx=1))
     else:
         entities.append(WorkDurationNumber(device, entry))
         entities.append(PauseDurationNumber(device, entry))
@@ -258,3 +261,71 @@ class ScentimentLevelNumber(NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_level(int(value))
+
+class AromaWaveModeWorkNumber(NumberEntity):
+    """Work-spray duration for an AromaWave scheduled mode (seconds)."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:timer"
+    _attr_native_unit_of_measurement = "s"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 600
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
+        self._device = device
+        self._mode_idx = mode_idx
+        self._attr_name = f"Mode {mode_idx} work duration"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_work"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float | None:
+        mode = self._device.state.aromawave_modes.get(self._mode_idx)
+        return mode.work_seconds if mode else None
+
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._device.set_aromawave_mode(self._mode_idx, work_seconds=int(value))
+
+class AromaWaveModePauseNumber(NumberEntity):
+    """Pause duration between sprays for an AromaWave scheduled mode (seconds)."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:time-pause"
+    _attr_native_unit_of_measurement = "s"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 3600
+    _attr_native_step = 1
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
+        self._device = device
+        self._mode_idx = mode_idx
+        self._attr_name = f"Mode {mode_idx} pause duration"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_pause"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float | None:
+        mode = self._device.state.aromawave_modes.get(self._mode_idx)
+        return mode.pause_seconds if mode else None
+
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._device.set_aromawave_mode(self._mode_idx, pause_seconds=int(value))

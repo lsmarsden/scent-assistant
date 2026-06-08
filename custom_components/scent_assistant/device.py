@@ -30,6 +30,8 @@ from .const import (
 from .protocol_ble import (
     BleProtocol,
     DiffuserState,
+    AromaWaveMode,
+    AromaWaveProtocol,
     ScheduleSlot,
     ScheduleSetup,
     AromaLinkBleProtocol,
@@ -522,6 +524,12 @@ class ScentDiffuserDevice:
         if "firmware_version" in updates:
             self._state.firmware_version = updates["firmware_version"]
             changed = True
+        if "aromawave_mode_updates" in updates:
+            for mode_idx, fields in updates["aromwave_mode_updates"].items():
+                mode = self._state.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
+                for k, v in fields.items():
+                    setattr(mode, k, v)
+                changed = True
 
         if changed:
             self._notify_state_changed()
@@ -529,6 +537,48 @@ class ScentDiffuserDevice:
     # ------------------------------------------------------------------
     # Commands (BLE first, cloud fallback)
     # ------------------------------------------------------------------
+
+    async def set_aromawave_mode(
+        self,
+        mode_idx: int,
+        *,
+        enabled: bool | None = None,
+        start_hour: int | None = None,
+        start_minute: int | None = None,
+        end_hour: int | None = None,
+        end_minute: int | None = None,
+        work_seconds: int | None = None,
+        pause_seconds: int | None = None,
+    ) -> bool:
+        """Patch one or more fields of an AromaWave mode and re-emit the
+        FEEF 00 18 frame. The device requires all fields each write, so we
+        merge with cached state (falling back to safe defaults if unknown)."""
+        if not self._ble_address or not isinstance(self._protocol, AromaWaveProtocol):
+            return False
+        cached = self._state.aromawave_modes.get(mode_idx, AromaWaveMode())
+        new_enabled = enabled if enabled is not None else (cached.enabled or False)
+        new_sh = start_hour if start_hour is not None else (cached.start_hour or 9)
+        new_sm = start_minute if start_minute is not None else (cached.start_minute or 0)
+        new_eh = end_hour if end_hour is not None else (cached.end_hour or 22)
+        new_em = end_minute if end_minute is not None else (cached.end_minute or 0)
+        new_ws = work_seconds if work_seconds is not None else (cached.work_seconds or 10)
+        new_ps = pause_seconds if pause_seconds is not None else (cached.pause_seconds or 120)
+        cmd = self._protocol.build_mode_schedule(
+            mode_idx, new_sh, new_sm, new_eh, new_em, new_ws, new_ps, new_enabled
+        )
+        if await self._ble_execute(cmd):
+            #Optimistic local update; device echo will confirm.
+            mode = self._state.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
+            mode.enabled = new_enabled
+            mode.start_hour = new_sh
+            mode.start_minute = new_sm
+            mode.end_hour = new_eh
+            mode.end_minute = new_em
+            mode.work_seconds = new_ws
+            mode.pause_seconds = new_ps
+            self._notify_state_changed()
+            return True
+        return False
 
     async def set_power(self, on: bool) -> bool:
         """Turn device on or off."""

@@ -13,6 +13,7 @@ from .const import (
     DeviceType,
 )
 from .device import ScentDiffuserDevice
+from .number import AromaWaveModeWorkNumber
 
 GW_TYPES = {DeviceType.SCENT_MARKETING_GW, DeviceType.SCENT_MARKETING_GW_XOR}
 
@@ -47,6 +48,9 @@ async def async_setup_entry(
         entities.append(DiffuserLampSwitch(device, entry))
         if device.device_type == DeviceType.SCENT_MARKETING_AK:
             entities.append(DiffuserFanSwitch(device, entry))
+
+    if device.device_type == DeviceType.AROMA_WAVE and not is_cloud:
+        entities.append(AromaWaveModeSwitch(device, entry, mode_idx=1))
 
     async_add_entities(entities)
 
@@ -190,3 +194,35 @@ class DiffuserFanSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._device.set_fan(False)
+
+class AromaWaveModeSwitch(SwitchEntity):
+    """Toggle one of the AromaWave scheduled modes on or off."""
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
+        self._device = device
+        self._mode_idx = mode_idx
+        self._attr_name = f"Mode {mode_idx} enabled"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_{mode_idx}_enabled"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self) -> bool | None:
+        mode = self._device.state.aromawave_modes.get(self._mode_idx)
+        return mode.enabled if mode else None
+
+    @property
+    def available(self) -> bool:
+        return self._device.available
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._device.set_aromawave_mode(self._mode_idx, enabled=True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._device.set_aromawave_mode(self._mode_idx, enabled=False)
+
