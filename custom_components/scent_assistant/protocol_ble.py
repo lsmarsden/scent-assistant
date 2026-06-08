@@ -1355,6 +1355,16 @@ class AromaWaveProtocol(BleProtocol):
 
     _ORDER_LEN = 20 # bytes between FEEF and EFFF
 
+    def __init__(self) -> None:
+        # Notifications arrive as 20-byte GATT chunks that split JSON objects
+        # mid-string; buffer raw bytes and pull complete `{...}` objects out.
+        self._json_buffer = bytearray()
+        # The device fragments large state responses across multiple JSON
+        # objects keyed by num/duan, with ALL field carrying hex bytes.
+        # Accumulate hex pieces per num until the assembled frame terminates
+        # in "EFFF" (or until a fresh num appears).
+        self._partial_state: dict[int, bytearray] = {}
+
     @classmethod
     def _wrap_envelope(cls, order: bytes) -> bytes:
         """Wrap a 20-byte order payload in the JSON FEEF...EFFF envelope."""
@@ -1408,9 +1418,122 @@ class AromaWaveProtocol(BleProtocol):
         return self._build_envelope(0x0500, 0)
 
     def parse_notification(self, data: bytes) -> dict:
-#         status decoding not yet reverse-engineered; surface nothing
-#         rather than guess. power state will mirror last write
-        return {}
+        """Reassemble JSON across 20-byte chunks and decode known frames.
+
+        Two response shapes seen on the wire:
+          1. Echo of our request: `{"TYPE":3,"ID":"(null)","TO":"(null)",
+             "MSG":"order:FEEF...EFFF"}` - confirms the device received our
+             write. We decode the FEEF inner to mirror state immediately.
+          2. Multi-chunk state push: `{"num":N,"duan":D,"ALL":"FE EF ... EF
+             FF"} - split into D chunks per N, hex bytes space-separated.
+             Reassemble by num, decode when the full hex ends with EFFF.
+
+        Returns a dict of state field updates consumable by device.py."""
+        self._json_buffer.extend(data)
+        result: dict = {}
+        while True:
+            obj_bytes, end = self._extract_first_json(self._json_buffer)
+            if obj_bytes is None:
+                break
+            del self._json_buffer[end:]
+            try:
+                obj = json.loads(obj_bytes)
+            except Exception as err:
+                _LOGGER.debug("AromaWave: malformed JSON object: %s (%r)", err, obj_bytes[:80])
+                continue
+            self._dispatch_json_object(obj, result)
+        return result
+
+    @staticmethod
+    def _extract_first_json(buf: bytearray) -> tuple[bytes | None, int]:
+        """Find the first complete top-level `{...}` in buf.
+
+        Returns (object_bytes, end_index). If no complete object yet,
+        returns (None, 0). Quote-aware so braces inside strings don't
+        confuse the depth count; the protocol's MSG field doesn't escape
+        braces but ALL/MSG values can contain other characters."""
+        depth = 0
+        in_string = False
+        escape = False
+        start = -1
+        for i, b in enumerate(buf):
+            c = chr(b)
+            if start < 0:
+                if c == "{":
+                    start = i
+                    depth = 1
+                continue
+            if escape:
+                escape = False
+                continue
+            if c == "\\" and in_string:
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return bytes(buf[start:i + 1]), i + 1
+        return None, 0
+
+    def _dispatch_json_object(self, obj: dcit, result: dict) -> None:
+        """Route a single parsed JSON object to the appropriate decoder."""
+        # Echo of our request - decode the MSG order: inner immediately.
+        if "MSG" in obj:
+            msg = obj.get("MSG", "")
+            inner = self._strip_feef(msg.replace("order:", ""))
+            if inner is not None:
+                self._decode_inner(inner, result)
+            return
+        # Fragmented state push.
+        if "num" in obj and "ALL" in obj:
+            num = obj["num"]
+            piece = obj.get("ALL", "").replace(" ", "")
+            buf = self._partial_state.setdefault(num, bytearray())
+            buf.extend(piece.encode("ascii"))
+            if buf.endswith(b"EFFF"):
+                full_hex = bytes(buf)
+                del self._partial_state[num]
+                inner = self._strip_feef(full_hex.decode("ascii"))
+                if inner is not None:
+                    self._decode_inner(inner, result)
+
+    @staticmethod
+    def _strip_feef(hex_str: str) -> bytes | None:
+        """Strip the FEEF...EFFF wrapper from a hex string and return inner bytes."""
+        hex_str = hex_str.strip().upper().replace(" ", "")
+        if not hex_str.startswith("FEEF") or not hex_str.endswith("EFFF"):
+            return None
+        inner_hex = hex_str[4:-4]
+        if len(inner_hex) % 2:
+            return None
+        try:
+            return bytes.fromhex(inner_hex)
+        except ValueError:
+            return None
+
+    def _decode_inner(self, inner: bytes, result: dict) -> None:
+        """Decode a FEEF-stripped inner frame into state updates."""
+        if not inner:
+            return
+        op = inner[0]
+        if op == 0x00 and len(inner) >= 3:
+            attr = inner[1]
+            if attr == 0x0E:
+                # Power state: 00 0E [value]
+                result["power"] = inner[2] == 1
+                result["phase"] = "idle" if result["power"] else "off"
+                return
+        # Other ops (0x05 ping responses, 0x18 mode schedule, etc.) carry
+        # state we haven't decoded yet. Log for triage rather than swallow.
+        _LOGGER.debug("AromaWave: undecoded inner frame op=0x%02X len=%d %s",
+                      op, len(inner), inner.hex())
 
 # ---------------------------------------------------------------------------
 # Factory
