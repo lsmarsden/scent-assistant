@@ -203,7 +203,7 @@ class AromaWaveModeSwitch(SwitchEntity):
         self._device = device
         self._mode_idx = mode_idx
         self._attr_name = f"Mode {mode_idx} enabled"
-        self._attr_unique_id = f"{device.unique_id}_aromawave_{mode_idx}_enabled"
+        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_enabled"
         self._attr_device_info = device.device_info
         device.register_state_callback(self._on_state_update)
 
