@@ -300,7 +300,7 @@ class AromaWaveModePauseNumber(NumberEntity):
     """Pause duration between sprays for an AromaWave scheduled mode (seconds)."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:time-pause"
+    _attr_icon = "mdi:timer-pause"
     _attr_native_unit_of_measurement = "s"
     _attr_native_min_value = 1
     _attr_native_max_value = 3600

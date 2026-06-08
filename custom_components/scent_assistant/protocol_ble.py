@@ -1439,7 +1439,7 @@ class AromaWaveProtocol(BleProtocol):
         order[1] = 0x14
         order[2] = 0x00
         order[3] = mode & 0xFF
-        order[4] = weekday_mask & 0xFF
+        order[4] = weekday_mask & 0x7F
         return self._wrap_envelope(order)
 
 
@@ -1493,7 +1493,7 @@ class AromaWaveProtocol(BleProtocol):
             obj_bytes, end = self._extract_first_json(self._json_buffer)
             if obj_bytes is None:
                 break
-            del self._json_buffer[end:]
+            del self._json_buffer[:end]
             try:
                 obj = json.loads(obj_bytes)
             except Exception as err:
@@ -1540,7 +1540,7 @@ class AromaWaveProtocol(BleProtocol):
                     return bytes(buf[start:i + 1]), i + 1
         return None, 0
 
-    def _dispatch_json_object(self, obj: dcit, result: dict) -> None:
+    def _dispatch_json_object(self, obj: dict, result: dict) -> None:
         """Route a single parsed JSON object to the appropriate decoder."""
         # Echo of our request - decode the MSG order: inner immediately.
         if "MSG" in obj:

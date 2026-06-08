@@ -525,7 +525,7 @@ class ScentDiffuserDevice:
             self._state.firmware_version = updates["firmware_version"]
             changed = True
         if "aromawave_mode_updates" in updates:
-            for mode_idx, fields in updates["aromwave_mode_updates"].items():
+            for mode_idx, fields in updates["aromawave_mode_updates"].items():
                 mode = self._state.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
                 for k, v in fields.items():
                     setattr(mode, k, v)

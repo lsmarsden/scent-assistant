@@ -13,7 +13,6 @@ from .const import (
     DeviceType,
 )
 from .device import ScentDiffuserDevice
-from .number import AromaWaveModeWorkNumber
 
 GW_TYPES = {DeviceType.SCENT_MARKETING_GW, DeviceType.SCENT_MARKETING_GW_XOR}
 

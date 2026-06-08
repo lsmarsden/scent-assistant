@@ -11,7 +11,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DeviceType
 from .device import ScentDiffuserDevice
-from .switch import AromaWaveModeSwitch
 
 _LOGGER = logging.getLogger(__name__)
 
