@@ -767,7 +767,13 @@ class ScentMarketingGwProtocol(BleProtocol):
     # GW notifications arrive as a stream of small fragments — we cannot
     # parse a single chunk in isolation.
     def __init__(self, tuya_dp_mode: bool = False) -> None:
-        self._notify_buffer: list[bytes] = []
+        # Per-nonce reassembly buffers. Each TX frame uses a fresh random
+        # nonce; responses share that nonce across their chunks. The device
+        # interleaves responses to back-to-back writes (e.g. our time-sync
+        # followed immediately by the password handshake), so we cannot use
+        # a single shraed buffer or chunks of different responses get glued
+        # together into garbage frames.
+        self._notify_buffers: dict[int, bytearray] = {}
         # Some GW firmwares (those advertising PID 98) push their state
         # in Tuya-DP hex-string format instead of the regular binary
         # frame. The wire layout is the same; only the type-tag-driven
@@ -1006,15 +1012,17 @@ class ScentMarketingGwProtocol(BleProtocol):
         """Feed an on-wire 20-byte chunk into the reassembly buffer.
 
         Returns the reassembled inner frame once a short (< 20-byte) chunk
-        is received signalling end-of-frame, otherwise None.
+        is received signalling end-of-frame, otherwise None. Buffers are
+        keyed by nonce (chunk byte 0) so concurrent responses don't merge.
         """
         if len(chunk) < 2:
             return None
-        # Strip the (nonce, seq) header.
-        self._notify_buffer.append(chunk[2:])
+        nonce = chunk[0]
+        buf = self._notify_buffers.setdefault(nonce, bytearray())
+        buf.extend(chunk[2:])
         if len(chunk) < 20:
-            frame = b"".join(self._notify_buffer)
-            self._notify_buffer.clear()
+            frame = bytes(buf)
+            del self._notify_buffers[nonce]
             # Some firmwares periodically send a noise pulse rather than a
             # data frame; the app discards them.
             if frame.hex() == SM_GW_HEARTBEAT_HEX:
