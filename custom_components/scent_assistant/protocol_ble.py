@@ -1380,33 +1380,42 @@ class AromaWaveProtocol(BleProtocol):
         self._partial_state: dict[int, bytearray] = {}
 
     @classmethod
-    def _wrap_envelope(cls, order: bytes) -> bytes:
-        """Wrap a 20-byte order payload in the JSON FEEF...EFFF envelope."""
+    def _wrap_envelope(cls, order: bytes, type_tag: int = 3) -> bytes:
+        """Wrap a 20-byte order payload in the JSON FEEF...EFFF envelope.
+
+        Most frames use TYPE 3; the app uses TYPE 4 for certain read queries
+        (06 schedule, 08 info, 09 weekday)."""
         inner_hex = b"FEEF" + order.hex().upper().encode("ascii") + b"EFFF"
         return (
-            b'{"TYPE":3,"ID":"(null)","TO":"(null)","MSG":"order:'
+            b'{"TYPE":' + str(type_tag).encode("ascii")
+            + b',"ID":"(null)","TO":"(null)","MSG":"order:'
             + inner_hex
             + b'"}'
         )
 
     @classmethod
-    def _build_envelope(cls, cmd: int, value: int) -> bytes:
+    def _build_envelope(cls, cmd: int, value: int, type_tag: int = 3) -> bytes:
         order = bytearray(cls._ORDER_LEN)
         order[0] = (cmd >> 8) & 0xFF
         order[1] = cmd & 0xFF
         order[2] = value & 0xFF
-        return cls._wrap_envelope(order)
+        return cls._wrap_envelope(order, type_tag)
 
     def build_power(self, on: bool) -> bytes:
         # Polarity is inverted on this firmware: 0x00 = on, 0x01 = off
         # (confirmed against the live device).
         return self._build_envelope(0x000E, 0 if on else 1)
 
-    def build_mode_init(self) -> list[bytes]:
-        """Frames the app sends after connect before any command. The 02
-        frame reads back the device password (auth/unlock); active control
-        appears gated behind it."""
-        return [self._build_envelope(0x200, 0)]
+    def build_connect_init(self) -> list[bytes]:
+        """Frames the app sends after connect before any command:
+         - 02 reads back the device password (auth/unlock); active control
+           appears gated behind it.
+         - 06 (TYPE 4) reads back the stored per-mode scheudles so we can
+           prefill state instead of overwriting with defaults."""
+        return [
+            self._build_envelope(0x200, 0),
+            self._build_envelope(0x0600, 0, type_tag=4),
+        ]
 
     def build_mode_schedule(
             self,
@@ -1562,7 +1571,13 @@ class AromaWaveProtocol(BleProtocol):
         if "num" in obj and "ALL" in obj:
             num = obj["num"]
             piece = obj.get("ALL", "").replace(" ", "")
-            buf = self._partial_state.setdefault(num, bytearray())
+            # `duan` is the 0-based chunk index. Reset the accumulator on the
+            # first chunk so a dropped tail from a prior frame can't corrupt
+            # this one (num is a chunk-count, not a unique frame id).
+            if obj.get("duan", 0) == 0:
+                buf = self._partial_state[num] = bytearray()
+            else:
+                buf = self._partial_state.setdefault(num, bytearray())
             buf.extend(piece.encode("ascii"))
             if buf.endswith(b"EFFF"):
                 full_hex = bytes(buf)
@@ -1626,6 +1641,24 @@ class AromaWaveProtocol(BleProtocol):
             # is holding. Inverted polarity, same as the power command.
             result["power"] = (inner[1] & 0x01) == 0
             result["phase"] = "idle" if result["power"] else "off"
+            return
+        if op == 0x06 and is_state_push and len(inner) >= 49:
+            # 06 schedule readout, field-grouped, up to 6 modes (m = mode-1)
+            # start hours inner[1+m] start mins inner[7+m]
+            # end hours inner[13+m] end mins inner[19+m]
+            # work (u16-LE) inner[25+2m]
+            # pause (u16-LE) inner[37+2m]
+            # Tail after inner[48] is a timestamp echo we ignore.
+            updates = result.setdefault("aromawave_mode_updates", {})
+            for m in range(6):
+                updates.setdefault(m + 1, {}).update({
+                    "start_hour": inner[1 + m],
+                    "start_minute": inner[7 + m],
+                    "end_hour": inner[13 + m],
+                    "end_minute": inner[19 + m],
+                    "work_seconds": inner[25 + 2 * m] | (inner[26 + 2 * m] << 8),
+                    "pause_seconds": inner[37 + 2 * m] | (inner[3 + 2 * m] << 8),
+                })
             return
         # Other ops carry data we haven't decoded yet. Log for triage.
         _LOGGER.debug("AromaWave: undecoded inner frame op=0x%02X len=%d %s",
