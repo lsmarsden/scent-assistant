@@ -1400,6 +1400,9 @@ class AromaWaveProtocol(BleProtocol):
     def build_power(self, on: bool) -> bytes:
         return self._build_envelope(0x000E, 1 if on else 0)
 
+    def build_mode_init(self) -> list[bytes]:
+        return [self._build_envelope(0x200, 0)]
+
     def build_mode_schedule(
             self,
             mode: int,

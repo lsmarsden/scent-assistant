@@ -282,6 +282,10 @@ class ScentDiffuserDevice:
                         _LOGGER.info("BLE connected: %s", self._ble_name)
                     self._ble_has_synced_time = True
 
+                    if isinstance(self._protocol, AromaWaveProtocol):
+                        for frame in self._protocol.build_connect_init():
+                            await self._ble_send(frame)
+
                 # GW family password handshake. We send unconditionally —
                 # the firmware ignores a password write on unprotected
                 # devices, and there's no reliable pre-connect way to tell
