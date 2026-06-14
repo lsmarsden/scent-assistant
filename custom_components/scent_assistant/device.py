@@ -282,6 +282,10 @@ class ScentDiffuserDevice:
                         _LOGGER.info("BLE connected: %s", self._ble_name)
                     self._ble_has_synced_time = True
 
+                    # AromaWave: the app issues a 02 (auth/unlock) read before
+                    # any command. Config writes are accepted without it but
+                    # active control (power, mode enable) appears gated behind
+                    # it. Send it once on connect, after time sync.
                     if isinstance(self._protocol, AromaWaveProtocol):
                         for frame in self._protocol.build_connect_init():
                             await self._ble_send(frame)

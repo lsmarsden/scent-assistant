@@ -1398,9 +1398,14 @@ class AromaWaveProtocol(BleProtocol):
         return cls._wrap_envelope(order)
 
     def build_power(self, on: bool) -> bytes:
-        return self._build_envelope(0x000E, 1 if on else 0)
+        # Polarity is inverted on this firmware: 0x00 = on, 0x01 = off
+        # (confirmed against the live device).
+        return self._build_envelope(0x000E, 0 if on else 1)
 
     def build_mode_init(self) -> list[bytes]:
+        """Frames the app sends after connect before any command. The 02
+        frame reads back the device password (auth/unlock); active control
+        appears gated behind it."""
         return [self._build_envelope(0x200, 0)]
 
     def build_mode_schedule(
@@ -1430,7 +1435,8 @@ class AromaWaveProtocol(BleProtocol):
         order[11] = pause_seconds & 0xFF
         order[12] = 0x05
         order[13] = 0x0A
-        order[14] = 0x01 if enabled else 0x00
+        #Inverted polarity, same as power: 0x00 = enabled, 0x01 = disabled.
+        order[14] = 0x00 if enabled else 0x01
         # bytes 15-18 zero-padding
         order[19] = 0xFF
         return self._wrap_envelope(order)
@@ -1563,7 +1569,7 @@ class AromaWaveProtocol(BleProtocol):
                 del self._partial_state[num]
                 inner = self._strip_feef(full_hex.decode("ascii"))
                 if inner is not None:
-                    self._decode_inner(inner, result)
+                    self._decode_inner(inner, result, is_state_push=True)
 
     @staticmethod
     def _strip_feef(hex_str: str) -> bytes | None:
@@ -1579,16 +1585,21 @@ class AromaWaveProtocol(BleProtocol):
         except ValueError:
             return None
 
-    def _decode_inner(self, inner: bytes, result: dict) -> None:
-        """Decode a FEEF-stripped inner frame into state updates."""
+    def _decode_inner(self, inner: bytes, result: dict, is_state_push: bool = False) -> None:
+        """Decode a FEEF-stripped inner frame into state updates.
+
+        `is_state_push` distinguishes the device's spontaneous state frames
+        (num/duan reassembly) from echoes of our own writes (MSG order:).
+        The 05 status frame is only meaningful as a state push - the echo of
+        our 05 poll carries a zero value byte and must not be decoded."""
         if not inner:
             return
         op = inner[0]
         if op == 0x00 and len(inner) >= 3:
             attr = inner[1]
             if attr == 0x0E:
-                # Power: 00 0E [value]
-                result["power"] = inner[2] == 1
+                # Power: 00 0E [value]. Inverted: 0 = on, 1 = off.
+                result["power"] = inner[2] == 0
                 result["phase"] = "idle" if result["power"] else "off"
                 return
             if attr == 0x14 and len(inner) >= 5:
@@ -1606,12 +1617,17 @@ class AromaWaveProtocol(BleProtocol):
                     "end_minute": inner[7],
                     "work_seconds": (inner[8] << 8) | inner[9],
                     "pause_seconds": (inner[10] << 8) | inner[11],
-                    "enabled": inner[14] == 1,
+                    "enabled": inner[14] == 0, # inverted: 0 = enabled
                 }
                 result.setdefault("aromawave_mode_updates", {}).setdefault(mode, {}).update(updates)
                 return
-        # Other ops (0x05 ping responses with bulk state, etc.) carry data
-        # we haven't decoded yet. Log for triage rather than swallow.
+        if op == 0x05 and is_state_push and len(inner) >= 2:
+            # 05 status push: byte 1 bit0 holds the power value the device
+            # is holding. Inverted polarity, same as the power command.
+            result["power"] = (inner[1] & 0x01) == 0
+            result["phase"] = "idle" if result["power"] else "off"
+            return
+        # Other ops carry data we haven't decoded yet. Log for triage.
         _LOGGER.debug("AromaWave: undecoded inner frame op=0x%02X len=%d %s",
                       op, len(inner), inner.hex())
 
