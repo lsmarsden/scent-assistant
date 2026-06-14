@@ -1657,7 +1657,7 @@ class AromaWaveProtocol(BleProtocol):
                     "end_hour": inner[13 + m],
                     "end_minute": inner[19 + m],
                     "work_seconds": inner[25 + 2 * m] | (inner[26 + 2 * m] << 8),
-                    "pause_seconds": inner[37 + 2 * m] | (inner[3 + 2 * m] << 8),
+                    "pause_seconds": inner[37 + 2 * m] | (inner[38 + 2 * m] << 8),
                 })
             return
         # Other ops carry data we haven't decoded yet. Log for triage.
