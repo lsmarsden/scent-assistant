@@ -563,11 +563,17 @@ class ScentDiffuserDevice:
         new_em = end_minute if end_minute is not None else (cached.end_minute or 0)
         new_ws = work_seconds if work_seconds is not None else (cached.work_seconds or 10)
         new_ps = pause_seconds if pause_seconds is not None else (cached.pause_seconds or 120)
+        new_mask = cached.weekday_mask if cached.weekday_mask else 0x7F
+        # The app always sends the 00 14 weekday frame immediately before the
+        # 00 18 schedule frame. The device stores the schedule params from
+        # 00 18 alone, but the enable transition only commits when paired with
+        # the preceding 00 14 - so send both, in that order.
+        await self._ble_send(self._protocol.build_mode_weekday(mode_idx, new_mask))
         cmd = self._protocol.build_mode_schedule(
             mode_idx, new_sh, new_sm, new_eh, new_em, new_ws, new_ps, new_enabled
         )
         if await self._ble_execute(cmd):
-            #Optimistic local update; device echo will confirm.
+            # Optimistic local update; device echo will confirm.
             mode = self._state.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
             mode.enabled = new_enabled
             mode.start_hour = new_sh
@@ -576,6 +582,7 @@ class ScentDiffuserDevice:
             mode.end_minute = new_em
             mode.work_seconds = new_ws
             mode.pause_seconds = new_ps
+            mode.weekday_mask = new_mask
             self._notify_state_changed()
             return True
         return False
