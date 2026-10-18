@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DeviceType
 from .device import ScentDiffuserDevice
+from .entity import ScentEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,19 +30,14 @@ async def async_setup_entry(
     ])
 
 
-class TimeSyncButton(ButtonEntity):
+class TimeSyncButton(ScentEntity, ButtonEntity):
     """Button to manually sync the device clock."""
 
-    _attr_has_entity_name = True
     _attr_name = "Sync Time"
     _attr_icon = "mdi:clock-check"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_time_sync"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, device.unique_id)},
-        }
+        super().__init__(device, "time_sync")
 
     @property
     def available(self) -> bool:

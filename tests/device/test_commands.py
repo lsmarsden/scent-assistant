@@ -184,3 +184,14 @@ async def test_sync_time_resends(connected, bt: FakeBluetooth) -> None:
     before = len(bt.client.writes)
     assert await dev.sync_time() is True
     assert aroma_wave_order(bt.client.written()[before])[1].startswith("FEEF0007")
+
+
+async def test_state_callbacks_unsubscribe(connected, bt: FakeBluetooth) -> None:
+    dev = await connected(DeviceType.SCENT_MARKETING_GW)
+    calls: list[int] = []
+    unsubscribe = dev.register_state_callback(lambda: calls.append(1))
+
+    unsubscribe()
+    assert await dev.set_lamp(True)
+
+    assert calls == []

@@ -13,6 +13,7 @@ from .const import (
     DeviceType,
 )
 from .device import ScentDiffuserDevice
+from .entity import ScentEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,10 +48,9 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-class WorkDurationNumber(NumberEntity):
+class WorkDurationNumber(ScentEntity, NumberEntity):
     """Spray work duration in seconds."""
 
-    _attr_has_entity_name = True
     _attr_name = "Work Duration"
     _attr_icon = "mdi:timer"
     _attr_native_unit_of_measurement = "s"
@@ -60,34 +60,19 @@ class WorkDurationNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_work_duration"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, device.unique_id)},
-        }
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "work_duration")
 
     @property
     def native_value(self) -> float:
         return self._device.state.work_seconds or 10
 
-    @property
-    def available(self) -> bool:
-        return self._device.available
-
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_work_duration(int(value))
 
 
-class PauseDurationNumber(NumberEntity):
+class PauseDurationNumber(ScentEntity, NumberEntity):
     """Pause duration between sprays in seconds."""
 
-    _attr_has_entity_name = True
     _attr_name = "Pause Duration"
     _attr_icon = "mdi:timer-pause"
     _attr_native_unit_of_measurement = "s"
@@ -97,34 +82,19 @@ class PauseDurationNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_pause_duration"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, device.unique_id)},
-        }
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "pause_duration")
 
     @property
     def native_value(self) -> float:
         return self._device.state.pause_seconds or 120
 
-    @property
-    def available(self) -> bool:
-        return self._device.available
-
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_pause_duration(int(value))
 
 
-class GwWorkDurationNumber(NumberEntity):
+class GwWorkDurationNumber(ScentEntity, NumberEntity):
     """GW customise work duration in seconds (5-35)"""
 
-    _attr_has_entity_name = True
     _attr_name = "Work Duration"
     _attr_icon = "mdi:timer"
     _attr_native_unit_of_measurement = "s"
@@ -134,32 +104,21 @@ class GwWorkDurationNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_gw_work_duration"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "gw_work_duration")
 
     @property
     def native_value(self) -> float | None:
         return self._device.state.work_seconds or None
 
-    @property
-    def available(self) -> bool:
-        return self._device.available and self._device.state.work_seconds is not None
+    _requires = "work_seconds"
 
     async def async_set_native_value(self, value: float) -> None:
         pause = self._device.state.pause_seconds or 60
         await self._device.set_customize(int(value), pause)
 
-class GwPauseDurationNumber(NumberEntity):
+class GwPauseDurationNumber(ScentEntity, NumberEntity):
     """GW customise pause duration in seconds (60-300)"""
 
-    _attr_has_entity_name = True
     _attr_name = "Pause Duration"
     _attr_icon = "mdi:timer-pause"
     _attr_native_unit_of_measurement = "s"
@@ -169,30 +128,20 @@ class GwPauseDurationNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_gw_pause_duration"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "gw_pause_duration")
 
     @property
     def native_value(self) -> float | None:
         return self._device.state.pause_seconds or None
 
-    @property
-    def available(self) -> bool:
-        return self._device.available and self._device.state.pause_seconds is not None
+    _requires = "pause_seconds"
 
     async def async_set_native_value(self, value: float) -> None:
         work = self._device.state.work_seconds or 5
         await self._device.set_customize(work, int(value))
 
 
-class GwGradeNumber(NumberEntity):
+class GwGradeNumber(ScentEntity, NumberEntity):
     """Spray grade (1-5) for Scent Marketing GW devices.
 
     Setting the grade re-emits a DP-4 frame with an all-day all-week task
@@ -200,7 +149,6 @@ class GwGradeNumber(NumberEntity):
     "24-hour mode" behaviour.
     """
 
-    _attr_has_entity_name = True
     _attr_name = "Grade"
     _attr_icon = "mdi:speedometer"
     _attr_native_min_value = 1
@@ -209,32 +157,21 @@ class GwGradeNumber(NumberEntity):
     _attr_mode = NumberMode.SLIDER
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_grade"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "grade")
 
     @property
     def native_value(self) -> float | None:
         return self._device.state.grade
 
-    @property
-    def available(self) -> bool:
-        return self._device.available and self._device.state.grade is not None
+    _requires = "grade"
 
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_grade(int(value))
 
 
-class ScentimentLevelNumber(NumberEntity):
+class ScentimentLevelNumber(ScentEntity, NumberEntity):
     """Spray intensity level (Scentiment, 1-3)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Level"
     _attr_icon = "mdi:speedometer"
     _attr_native_min_value = 1
@@ -243,33 +180,18 @@ class ScentimentLevelNumber(NumberEntity):
     _attr_mode = NumberMode.SLIDER
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_level"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, device.unique_id)},
-        }
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "level")
 
     @property
     def native_value(self) -> float | None:
         return self._device.state.level
 
-    @property
-    def available(self) -> bool:
-        return self._device.available
-
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_level(int(value))
 
-class AromaWaveModeWorkNumber(NumberEntity):
+class AromaWaveModeWorkNumber(ScentEntity, NumberEntity):
     """Work-spray duration for an AromaWave scheduled mode (seconds)."""
 
-    _attr_has_entity_name = True
     _attr_icon = "mdi:timer"
     _attr_native_unit_of_measurement = "s"
     _attr_native_min_value = 1
@@ -278,34 +200,21 @@ class AromaWaveModeWorkNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
-        self._device = device
         self._mode_idx = mode_idx
         self._attr_name = f"Mode {mode_idx} work duration"
-        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_work"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, f"aromawave_mode_{mode_idx}_work")
 
     @property
     def native_value(self) -> float | None:
         mode = self._device.state.aromawave_modes.get(self._mode_idx)
         return mode.work_seconds if mode else None
 
-    @property
-    def available(self) -> bool:
-        return self._device.available
-
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_aromawave_mode(self._mode_idx, work_seconds=int(value))
 
-class AromaWaveModePauseNumber(NumberEntity):
+class AromaWaveModePauseNumber(ScentEntity, NumberEntity):
     """Pause duration between sprays for an AromaWave scheduled mode (seconds)."""
 
-    _attr_has_entity_name = True
     _attr_icon = "mdi:timer-pause"
     _attr_native_unit_of_measurement = "s"
     _attr_native_min_value = 1
@@ -314,26 +223,14 @@ class AromaWaveModePauseNumber(NumberEntity):
     _attr_mode = NumberMode.BOX
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
-        self._device = device
         self._mode_idx = mode_idx
         self._attr_name = f"Mode {mode_idx} pause duration"
-        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_pause"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, f"aromawave_mode_{mode_idx}_pause")
 
     @property
     def native_value(self) -> float | None:
         mode = self._device.state.aromawave_modes.get(self._mode_idx)
         return mode.pause_seconds if mode else None
-
-    @property
-    def available(self) -> bool:
-        return self._device.available
 
     async def async_set_native_value(self, value: float) -> None:
         await self._device.set_aromawave_mode(self._mode_idx, pause_seconds=int(value))

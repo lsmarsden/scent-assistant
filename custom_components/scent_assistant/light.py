@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DeviceType
 from .device import ScentDiffuserDevice
+from .entity import ScentEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,27 +31,16 @@ async def async_setup_entry(
     async_add_entities([ScentimentRgbLight(device, entry)])
 
 
-class ScentimentRgbLight(LightEntity):
+class ScentimentRgbLight(ScentEntity, LightEntity):
     """RGB LED on the Scentiment Diffuser Air 2."""
 
-    _attr_has_entity_name = True
     _attr_name = "LED"
     _attr_icon = "mdi:led-on"
     _attr_color_mode = ColorMode.RGB
     _attr_supported_color_modes = {ColorMode.RGB}
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_led"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, device.unique_id)},
-        }
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "led")
 
     @property
     def is_on(self) -> bool | None:
@@ -59,10 +49,6 @@ class ScentimentRgbLight(LightEntity):
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
         return self._device.state.rgb_color
-
-    @property
-    def available(self) -> bool:
-        return self._device.available
 
     async def async_turn_on(self, **kwargs) -> None:
         rgb = kwargs.get(ATTR_RGB_COLOR)

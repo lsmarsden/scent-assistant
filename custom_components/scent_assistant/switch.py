@@ -16,6 +16,7 @@ from .const import (
     LinkPolicy,
 )
 from .device import ScentDiffuserDevice
+from .entity import ScentEntity
 
 GW_TYPES = {DeviceType.SCENT_MARKETING_GW, DeviceType.SCENT_MARKETING_GW_XOR}
 
@@ -64,31 +65,18 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class DiffuserPowerSwitch(SwitchEntity):
+class DiffuserPowerSwitch(ScentEntity, SwitchEntity):
     """Power on/off switch for the diffuser."""
 
-    _attr_has_entity_name = True
     _attr_name = "Power"
     _attr_icon = "mdi:power"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_power"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "power")
 
     @property
     def is_on(self) -> bool | None:
         return self._device.state.power
-
-    @property
-    def available(self) -> bool:
-        return self._device.available
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_power(True)
@@ -97,35 +85,21 @@ class DiffuserPowerSwitch(SwitchEntity):
         await self._device.set_power(False)
 
 
-class DiffuserLockSwitch(SwitchEntity):
+class DiffuserLockSwitch(ScentEntity, SwitchEntity):
     """Child-lock switch (Scent Marketing devices)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Child lock"
     _attr_icon = "mdi:lock"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_lock"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "lock")
+        # GW devices report it in their state push; AK has no read-back.
+        if device.device_type in GW_TYPES:
+            self._requires = "lock"
 
     @property
     def is_on(self) -> bool | None:
         return self._device.state.lock
-
-    @property
-    def available(self) -> bool:
-        if not self._device.available:
-            return False
-        if self._device.device_type in GW_TYPES:
-            return self._device.state.lock is not None
-        return True
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_lock(True)
@@ -134,35 +108,21 @@ class DiffuserLockSwitch(SwitchEntity):
         await self._device.set_lock(False)
 
 
-class DiffuserLampSwitch(SwitchEntity):
+class DiffuserLampSwitch(ScentEntity, SwitchEntity):
     """Auxiliary LED / lamp switch (Scent Marketing AK family)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Lamp"
     _attr_icon = "mdi:lightbulb"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_lamp"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "lamp")
+        # GW devices report it in their state push; AK has no read-back.
+        if device.device_type in GW_TYPES:
+            self._requires = "light_on"
 
     @property
     def is_on(self) -> bool | None:
         return self._device.state.light_on
-
-    @property
-    def available(self) -> bool:
-        if not self._device.available:
-            return False
-        if self._device.device_type in GW_TYPES:
-            return self._device.state.light_on is not None
-        return True
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_lamp(True)
@@ -171,24 +131,15 @@ class DiffuserLampSwitch(SwitchEntity):
         await self._device.set_lamp(False)
 
 
-class DiffuserFanSwitch(SwitchEntity):
+class DiffuserFanSwitch(ScentEntity, SwitchEntity):
     """Fan on/off switch (Aroma-Link only, requires Bluetooth)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Fan"
     _attr_icon = "mdi:fan"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
         self._is_cloud_only = entry.data.get("connection_mode") == "cloud"
-        self._attr_unique_id = f"{device.unique_id}_fan"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "fan")
 
     @property
     def is_on(self) -> bool | None:
@@ -212,32 +163,19 @@ class DiffuserFanSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         await self._device.set_fan(False)
 
-class AromaWaveModeSwitch(SwitchEntity):
+class AromaWaveModeSwitch(ScentEntity, SwitchEntity):
     """Toggle one of the AromaWave scheduled modes on or off."""
-    _attr_has_entity_name = True
     _attr_icon = "mdi:calendar-clock"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry, mode_idx: int) -> None:
-        self._device = device
         self._mode_idx = mode_idx
         self._attr_name = f"Mode {mode_idx} enabled"
-        self._attr_unique_id = f"{device.unique_id}_aromawave_mode_{mode_idx}_enabled"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, f"aromawave_mode_{mode_idx}_enabled")
 
     @property
     def is_on(self) -> bool | None:
         mode = self._device.state.aromawave_modes.get(self._mode_idx)
         return mode.enabled if mode else None
-
-    @property
-    def available(self) -> bool:
-        return self._device.available
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_aromawave_mode(self._mode_idx, enabled=True)
@@ -246,33 +184,27 @@ class AromaWaveModeSwitch(SwitchEntity):
         await self._device.set_aromawave_mode(self._mode_idx, enabled=False)
 
 
-class DiffuserHoldConnectionSwitch(SwitchEntity):
+class DiffuserHoldConnectionSwitch(ScentEntity, SwitchEntity):
     """Whether HA holds the BLE connection. Turn off to let the vendor app
     connect; HA connects briefly for commands meanwhile and takes the
     connection back after 10 minutes."""
 
-    _attr_has_entity_name = True
     _attr_name = "Hold connection"
     _attr_icon = "mdi:bluetooth-connect"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_hold_connection"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "hold_connection")
 
     @property
     def is_on(self) -> bool | None:
         return self._device.link_held
 
-    # Always available: it's how you get the connection back after the
-    # vendor app has held the device.
+    @property
+    def available(self) -> bool:
+        # Always: it's how you get the connection back after the vendor
+        # app has held the device.
+        return True
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._device.set_hold_connection(True)

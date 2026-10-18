@@ -18,6 +18,7 @@ from .const import (
     DeviceType,
 )
 from .device import ScentDiffuserDevice
+from .entity import ScentEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,23 +55,14 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class DiffuserStatusSensor(SensorEntity):
+class DiffuserStatusSensor(ScentEntity, SensorEntity):
     """Shows the current spray cycle phase."""
 
-    _attr_has_entity_name = True
     _attr_name = "Status"
     _attr_icon = "mdi:spray"
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_status"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "status")
 
     @property
     def native_value(self) -> str:
@@ -88,61 +80,35 @@ class DiffuserStatusSensor(SensorEntity):
             "end_time": f"{state.end_hour:02d}:{state.end_minute:02d}",
         }
 
-    @property
-    def available(self) -> bool:
-        return self._device.available
 
-
-class DiffuserBatterySensor(SensorEntity):
+class DiffuserBatterySensor(ScentEntity, SensorEntity):
     """Battery level (Scentiment only)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Battery"
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_battery"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "battery")
 
     @property
     def native_value(self) -> int | None:
         return self._device.state.battery
 
-    @property
-    def available(self) -> bool:
-        if not self._device.available:
-            return False
-        return self._device.state.battery is not None
+    _requires = "battery"
 
 
-class DiffuserOilSensor(SensorEntity):
+class DiffuserOilSensor(ScentEntity, SensorEntity):
     """Remaining fragrance oil percentage (Scent Marketing GW family)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Oil remaining"
     _attr_icon = "mdi:water-percent"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_oil"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "oil")
 
     @property
     def native_value(self) -> int | None:
@@ -157,14 +123,10 @@ class DiffuserOilSensor(SensorEntity):
             attrs["total_ml"] = self._device.state.oil_total_ml
         return attrs
 
-    @property
-    def available(self) -> bool:
-        if not self._device.available:
-            return False
-        return self._device.state.oil_remaining is not None
+    _requires = "oil_remaining"
 
 
-class DiffuserDetectionDiagnostic(SensorEntity):
+class DiffuserDetectionDiagnostic(ScentEntity, SensorEntity):
     """Exposes Scent Marketing detection metadata as a diagnostic entity.
 
     The state is the detected protocol family; attributes carry the raw
@@ -173,19 +135,20 @@ class DiffuserDetectionDiagnostic(SensorEntity):
     work — no need to dig through HA's text logs.
     """
 
-    _attr_has_entity_name = True
     _attr_name = "Detected family"
     _attr_icon = "mdi:bluetooth-settings"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_sm_detection"
-        self._attr_device_info = device.device_info
+        super().__init__(device, "sm_detection")
 
     @property
     def native_value(self) -> str:
         return self._device.device_type.value
+
+    @property
+    def available(self) -> bool:
+        return True  # diagnostics stay readable when the device is unreachable
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -203,25 +166,20 @@ class DiffuserDetectionDiagnostic(SensorEntity):
         }
 
 
-class DiffuserConnectionSensor(SensorEntity):
+class DiffuserConnectionSensor(ScentEntity, SensorEntity):
     """Shows the current connection mode (BLE/Cloud/Offline)."""
 
-    _attr_has_entity_name = True
     _attr_name = "Connection"
     _attr_icon = "mdi:bluetooth-connect"
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.unique_id}_connection"
-        self._attr_device_info = device.device_info
-        device.register_state_callback(self._on_state_update)
-
-    def _on_state_update(self) -> None:
-        if self.hass is None:
-            return
-        self.async_write_ha_state()
+        super().__init__(device, "connection")
 
     @property
     def native_value(self) -> str:
         return self._device.connection_mode
+
+    @property
+    def available(self) -> bool:
+        return True  # reports "offline" itself

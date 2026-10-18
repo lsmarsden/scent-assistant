@@ -201,11 +201,13 @@ class ScentDiffuserDevice:
             return self._link.available
         return self.connection_mode != "offline"
 
-    def register_state_callback(self, callback: callable) -> None:
+    def register_state_callback(self, callback: callable) -> callable:
+        """Call `callback` on every state change; returns an unsubscribe."""
         self._state_callbacks.append(callback)
+        return lambda: self._state_callbacks.remove(callback)
 
     def _notify_state_changed(self) -> None:
-        for cb in self._state_callbacks:
+        for cb in list(self._state_callbacks):
             try:
                 cb()
             except Exception:
