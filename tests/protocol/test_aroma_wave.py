@@ -54,10 +54,11 @@ def frame(hex_bytes: str) -> bytes:
     lambda p: p.build_poll(),
     lambda p: p.build_connect_init()[0],
     lambda p: p.build_connect_init()[1],
+    lambda p: p.build_connect_init()[2],
     lambda p: p.build_mode_weekday(1, 0x7F),
     lambda p: p.build_mode_schedule(1, 8, 0, 23, 0, 10, 120, enabled=True),
     lambda p: p.build_mode_schedule(1, 8, 0, 23, 0, 10, 120, enabled=False),
-], ids=["power_on", "power_off", "poll", "unlock", "read_schedules",
+], ids=["power_on", "power_off", "poll", "unlock", "read_schedules", "read_weekdays",
         "mode_1_weekdays", "mode_1_enabled", "mode_1_disabled"])
 def test_command_matches_app(proto: AromaWaveProtocol, build) -> None:
     assert build(proto) in all_app_writes()
@@ -134,11 +135,59 @@ def test_mode_1_enable_toggle_reads_back(proto: AromaWaveProtocol) -> None:
         if (mode := proto.parse_notification(n).get("aromawave_mode_updates", {}).get(1))
         and "enabled" in mode
     ]
-    # Each schedule write the app made is echoed; byte 14 is 00 = enabled.
+    # The readout at connect (3E: mode 1 enabled), then each schedule write
+    # the app made is echoed; byte 14 is 00 = enabled.
     written = [aroma_wave_order(w)[1][32:34] == "00" for w in capture.writes
                if aroma_wave_order(w)[1].startswith("FEEF0018")]
     assert len(written) > 2
-    assert enabled == written
+    assert enabled == [True, *written]
+
+
+# dev505's 06 readouts on 18 Oct, read live from HA around toggling mode 1
+# (09:00-23:59, 1 s / 30 s; mode 2 09:00-19:01, 31 s / 151 s).
+LIVE_SCHEDULES = (
+    '{{"num":2,"duan":0,"ALL":"FE EF 06 09 09 00 00 00 00 00 00 00 00 00 00 17 13 00 00 '
+    '00 00 3B 01 00 00 00 00 01 00 1F 00 00"}}'
+    '{{"num":2,"duan":1,"ALL":"00 00 00 00 00 00 00 1E 00 97 00 00 00 00 00 00 00 00 00 '
+    '07 EA 0A 12 07 11 2E 09 00 {flags} 05 EF FF"}}'
+)
+
+
+class TestScheduleReadoutEnabled:
+    """The 06 readout's flag byte has bit m set while mode m+1 is disabled."""
+
+    @pytest.mark.parametrize(("flags", "mode_1"), [("3E", True), ("3F", False)])
+    def test_live_toggle(self, proto: AromaWaveProtocol, flags: str, mode_1: bool) -> None:
+        modes = replay(proto, [LIVE_SCHEDULES.format(flags=flags).encode()])["modes"]
+        assert modes[1]["enabled"] is mode_1
+        assert {m: modes[m]["enabled"] for m in range(2, 7)} == dict.fromkeys(range(2, 7), False)
+
+    def test_live_schedule(self, proto: AromaWaveProtocol) -> None:
+        mode_1 = replay(proto, [LIVE_SCHEDULES.format(flags="3F").encode()])["modes"][1]
+        assert {k: mode_1[k] for k in ("start_hour", "start_minute", "end_hour", "end_minute",
+                                       "work_seconds", "pause_seconds")} == {
+            "start_hour": 9, "start_minute": 0, "end_hour": 23, "end_minute": 59,
+            "work_seconds": 1, "pause_seconds": 30,
+        }
+
+
+class TestWeekdayReadout:
+    """The 09 readout leads with each mode's weekday mask."""
+
+    def test_app_session(self, proto: AromaWaveProtocol) -> None:
+        # Mode 2 had no days until the app set it up later in this session.
+        modes = replay(proto, load_capture(AW, "session_0515").notifications)["modes"]
+        assert modes[1]["weekday_mask"] == 0x7F
+
+    def test_unused_modes_have_no_days(self, proto: AromaWaveProtocol) -> None:
+        notifications = load_capture(AW, "cold_open").notifications
+        weekday_frames = [n for n in notifications if b"FE EF 09" in n]
+        assert weekday_frames
+        modes = replay(proto, notifications)["modes"]
+        assert [modes[m]["weekday_mask"] for m in range(1, 7)] == [0x7F, 0x7F, 0, 0, 0, 0]
+
+    def test_read_at_connect_uses_type_4(self, proto: AromaWaveProtocol) -> None:
+        assert aroma_wave_order(proto.build_connect_init()[2]) == (4, f"FEEF09{'00' * 19}EFFF")
 
 
 def test_final_power_matches_last_command(proto: AromaWaveProtocol) -> None:

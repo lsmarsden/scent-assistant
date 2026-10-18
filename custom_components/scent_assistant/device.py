@@ -259,13 +259,22 @@ class ScentDiffuserDevice:
         if not self._ble_address or not isinstance(self._protocol, AromaWaveProtocol):
             return False
         cached = self._state.aromawave_modes.get(mode_idx, AromaWaveMode())
-        new_enabled = enabled if enabled is not None else (cached.enabled or False)
-        new_sh = start_hour if start_hour is not None else (cached.start_hour or 9)
-        new_sm = start_minute if start_minute is not None else (cached.start_minute or 0)
-        new_eh = end_hour if end_hour is not None else (cached.end_hour or 22)
-        new_em = end_minute if end_minute is not None else (cached.end_minute or 0)
+
+        def pick(given: int | None, stored: int | None, default: int) -> int:
+            # 0 is a real value (midnight), so only None falls back.
+            if given is not None:
+                return given
+            return stored if stored is not None else default
+
+        new_enabled = enabled if enabled is not None else bool(cached.enabled)
+        new_sh = pick(start_hour, cached.start_hour, 9)
+        new_sm = pick(start_minute, cached.start_minute, 0)
+        new_eh = pick(end_hour, cached.end_hour, 22)
+        new_em = pick(end_minute, cached.end_minute, 0)
+        # A stored 0 s would make the mode do nothing; use the defaults.
         new_ws = work_seconds if work_seconds is not None else (cached.work_seconds or 10)
         new_ps = pause_seconds if pause_seconds is not None else (cached.pause_seconds or 120)
+        # A mode with no weekdays (an unused slot) runs every day once set.
         new_mask = cached.weekday_mask if cached.weekday_mask else 0x7F
         # The app always sends the 00 14 weekday frame immediately before the
         # 00 18 schedule frame. The device stores the schedule params from

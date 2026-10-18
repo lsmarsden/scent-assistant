@@ -45,10 +45,11 @@ class TestHandshake:
         self, make_link, bt: FakeBluetooth
     ) -> None:
         # Time sync first or the device ignores control writes (81b0ea6).
-        # On-demand, the refresh then polls status (05).
+        # Then schedules (06) and weekdays (09); on-demand, the refresh then
+        # polls status (05).
         await make_link(AW)
-        assert aw_orders(bt.client) == ["0007", "0200", "0600", "0500"]
-        assert aroma_wave_order(bt.client.written()[2])[0] == 4
+        assert aw_orders(bt.client) == ["0007", "0200", "0600", "0900", "0500"]
+        assert [aroma_wave_order(f)[0] for f in bt.client.written()[2:4]] == [4, 4]
         assert set(bt.client.notify_callbacks) == {AROMAWAVE_CHAR_UUID}
 
     async def test_gw_with_password_syncs_time_then_sends_it(

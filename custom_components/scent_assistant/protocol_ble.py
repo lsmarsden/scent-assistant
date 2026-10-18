@@ -1526,10 +1526,13 @@ class AromaWaveProtocol(BleProtocol):
          - 02 reads back the device password (auth/unlock); active control
            appears gated behind it.
          - 06 (TYPE 4) reads back the stored per-mode scheudles so we can
-           prefill state instead of overwriting with defaults."""
+           prefill state instead of overwriting with defaults.
+         - 09 (TYPE 4) reads back the per-mode weekday masks, which mode
+           writes must carry."""
         return [
             self._build_envelope(0x200, 0),
             self._build_envelope(0x0600, 0, type_tag=4),
+            self._build_envelope(0x0900, 0, type_tag=4),
         ]
 
     def build_mode_schedule(
@@ -1763,10 +1766,13 @@ class AromaWaveProtocol(BleProtocol):
             # end hours inner[13+m] end mins inner[19+m]
             # work (u16-LE) inner[25+2m]
             # pause (u16-LE) inner[37+2m]
-            # Tail after inner[48] is a timestamp echo we ignore.
+            # inner[49:57] is a timestamp echo; inner[58] bit m is set while
+            # the mode is disabled (inverted, like the enable byte; confirmed
+            # live by toggling mode 1: 3F off, 3E on).
             updates = result.setdefault("aromawave_mode_updates", {})
             for m in range(6):
-                updates.setdefault(m + 1, {}).update({
+                mode = updates.setdefault(m + 1, {})
+                mode.update({
                     "start_hour": inner[1 + m],
                     "start_minute": inner[7 + m],
                     "end_hour": inner[13 + m],
@@ -1774,6 +1780,15 @@ class AromaWaveProtocol(BleProtocol):
                     "work_seconds": inner[25 + 2 * m] | (inner[26 + 2 * m] << 8),
                     "pause_seconds": inner[37 + 2 * m] | (inner[38 + 2 * m] << 8),
                 })
+                if len(inner) >= 59:
+                    mode["enabled"] = not (inner[58] >> m) & 1
+            return
+        if op == 0x09 and is_state_push and len(inner) >= 7:
+            # 09 weekday readout: inner[1+m] is mode m+1's weekday mask
+            # (bit 0 = Monday). The rest is undecoded.
+            updates = result.setdefault("aromawave_mode_updates", {})
+            for m in range(6):
+                updates.setdefault(m + 1, {})["weekday_mask"] = inner[1 + m] & 0x7F
             return
         # Other ops carry data we haven't decoded yet. Log for triage.
         _LOGGER.debug("AromaWave: undecoded inner frame op=0x%02X len=%d %s",

@@ -167,6 +167,23 @@ async def test_aroma_wave_mode_defaults_without_readout(connected, bt: FakeBluet
     assert schedule.startswith("FEEF0018000109001600000F0078050A01")
 
 
+async def test_aroma_wave_mode_keeps_midnight_and_weekdays(connected, bt: FakeBluetooth) -> None:
+    # A stored 00:00 start is a real time, and the stored weekday mask
+    # (Mon-Fri here) is written back rather than reset to every day.
+    dev = await connected(DeviceType.AROMA_WAVE)
+    dev.state.apply({"aromawave_mode_updates": {1: {
+        "start_hour": 0, "start_minute": 0, "end_hour": 6, "end_minute": 30,
+        "work_seconds": 1, "pause_seconds": 30, "weekday_mask": 0x1F,
+    }}})
+    before = len(bt.client.writes)
+
+    assert await dev.set_aromawave_mode(1, enabled=True) is True
+
+    weekday, schedule = (aroma_wave_order(w)[1] for w in bt.client.written()[before:])
+    assert weekday.startswith("FEEF001400011F")
+    assert schedule.startswith("FEEF001800010000061E0001001E050A00")
+
+
 async def test_aroma_wave_power_push(connected, bt: FakeBluetooth) -> None:
     dev = await connected(DeviceType.AROMA_WAVE)
     calls = watch(dev)
