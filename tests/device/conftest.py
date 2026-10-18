@@ -1,15 +1,15 @@
-"""Device managers for our two diffusers, wired to the fake BLE link."""
+"""Device managers for our two diffusers, wired to the fake Bluetooth stack."""
 from __future__ import annotations
 
 import pytest
 
 from custom_components.scent_assistant.const import DeviceType
 from custom_components.scent_assistant.device import ScentDiffuserDevice
-from tests.fakes import AW_ADDRESS, GW_ADDRESS, FakeLink, settle
+from tests.fakes import AW_ADDRESS, GW_ADDRESS, FakeBluetooth, settle
 
 
 @pytest.fixture
-async def make_device(link: FakeLink):
+async def make_device(bt: FakeBluetooth):
     """Build (and later shut down) a device manager for one of our diffusers."""
     devices: list[ScentDiffuserDevice] = []
 
@@ -31,14 +31,14 @@ async def make_device(link: FakeLink):
 
 
 @pytest.fixture
-async def connected(make_device, link: FakeLink):
+async def connected(make_device, bt: FakeBluetooth):
     """Start a device and wait for its first connection."""
 
     async def start(device_type: DeviceType, **kwargs) -> ScentDiffuserDevice:
         dev = make_device(device_type, **kwargs)
         await dev.async_setup()
         await settle()
-        assert link.clients, "device never connected"
+        assert bt.clients, "device never connected"
         return dev
 
     return start

@@ -59,5 +59,19 @@
     "abort": {
       "already_configured": "Device is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Bluetooth connection",
+        "description": "Always connected suits diffusers that beep on every connection; turn off its Hold connection switch when you need the vendor app. Connect for each command suits quiet diffusers and leaves them free for the app between commands.",
+        "data": {
+          "link_policy": "Connection"
+        }
+      }
+    },
+    "abort": {
+      "no_options": "Cloud devices have no connection options."
+    }
   }
 }

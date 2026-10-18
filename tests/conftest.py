@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fakes import FakeLink
+from tests.fakes import FakeBluetooth
 
 
 @pytest.fixture
-def link(monkeypatch: pytest.MonkeyPatch) -> FakeLink:
-    """Stand in for the Bluetooth stack as seen by device.py."""
-    fake = FakeLink()
+def bt(monkeypatch: pytest.MonkeyPatch) -> FakeBluetooth:
+    """Stand in for the Bluetooth stack as seen by link.py."""
+    fake = FakeBluetooth()
     fake.install(monkeypatch)
     return fake

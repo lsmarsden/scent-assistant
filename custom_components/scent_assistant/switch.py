@@ -5,12 +5,15 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
     DeviceType,
+    LinkPolicy,
 )
 from .device import ScentDiffuserDevice
 
@@ -51,6 +54,13 @@ async def async_setup_entry(
     if device.device_type == DeviceType.AROMA_WAVE and not is_cloud:
         entities.append(AromaWaveModeSwitch(device, entry, mode_idx=1))
 
+    hold_unique_id = f"{device.unique_id}_hold_connection"
+    if device.link_policy is LinkPolicy.PERSISTENT:
+        entities.append(DiffuserHoldConnectionSwitch(device, entry))
+    elif stale := er.async_get(hass).async_get_entity_id("switch", DOMAIN, hold_unique_id):
+        # The device was switched to on-demand in the options flow.
+        er.async_get(hass).async_remove(stale)
+
     async_add_entities(entities)
 
 
@@ -68,6 +78,8 @@ class DiffuserPowerSwitch(SwitchEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -99,6 +111,8 @@ class DiffuserLockSwitch(SwitchEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -134,6 +148,8 @@ class DiffuserLampSwitch(SwitchEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -170,6 +186,8 @@ class DiffuserFanSwitch(SwitchEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -208,6 +226,8 @@ class AromaWaveModeSwitch(SwitchEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -225,3 +245,37 @@ class AromaWaveModeSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         await self._device.set_aromawave_mode(self._mode_idx, enabled=False)
 
+
+class DiffuserHoldConnectionSwitch(SwitchEntity):
+    """Whether HA holds the BLE connection. Turn off to let the vendor app
+    connect; HA connects briefly for commands meanwhile and takes the
+    connection back after 10 minutes."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Hold connection"
+    _attr_icon = "mdi:bluetooth-connect"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, device: ScentDiffuserDevice, entry: ConfigEntry) -> None:
+        self._device = device
+        self._attr_unique_id = f"{device.unique_id}_hold_connection"
+        self._attr_device_info = device.device_info
+        device.register_state_callback(self._on_state_update)
+
+    def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._device.link_held
+
+    # Always available: it's how you get the connection back after the
+    # vendor app has held the device.
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._device.set_hold_connection(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._device.set_hold_connection(False)

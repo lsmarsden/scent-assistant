@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 
 from .const import (
     DeviceType,
+    LinkPolicy,
     SERVICE_UUID, CHAR_WRITE_UUID, CHAR_NOTIFY_UUID,
     SCENTIMENT_SERVICE_UUID, SCENTIMENT_CHAR_WRITE_UUID, SCENTIMENT_CHAR_NOTIFY_UUID,
     SM_AK_SERVICE_UUID, SM_AK_CHAR_UUID, SM_GW_ALT_SERVICE_UUID,
@@ -157,6 +158,10 @@ class BleProtocol(ABC):
     # packets that the device treats as a malformed command.
     poll_interval_seconds: int | None = None
 
+    # Whether HA holds the connection by default. Devices that beep on
+    # connect stay persistent; the options flow can override per device.
+    default_link_policy: LinkPolicy = LinkPolicy.PERSISTENT
+
     @abstractmethod
     def build_power(self, on: bool) -> bytes:
         """Build power on/off command."""
@@ -168,6 +173,12 @@ class BleProtocol(ABC):
     def build_poll(self) -> bytes:
         """Build a safe periodic status request. Default: no poll."""
         return b""
+
+    def build_handshake(self, password: str | None = None) -> list[bytes]:
+        """Frames to send after every connect, before any command.
+        Default: a time sync, for protocols that support one."""
+        time_sync = self.build_time_sync()
+        return [time_sync] if time_sync else []
 
     @abstractmethod
     def build_query(self) -> bytes:
@@ -1014,6 +1025,15 @@ class ScentMarketingGwProtocol(BleProtocol):
         """Build the init/ACK packet that follows successful password auth."""
         return SM_GW_INIT_PACKET
 
+    def build_handshake(self, password: str | None = None) -> list[bytes]:
+        # Sent unconditionally when configured: the firmware ignores a
+        # password write on unprotected devices, and there's no reliable
+        # pre-connect way to tell which mode the device is in.
+        frames = super().build_handshake()
+        if password:
+            frames.append(self.build_password(password))
+        return frames
+
     def build_password(self, password: str) -> bytes:
         """Build a DP-13 password-check write.
 
@@ -1412,6 +1432,8 @@ class AromaWaveProtocol(BleProtocol):
     # iOS/Android apps poll every 1-3s; 60s is the loosest cadence that still
     # surfaces button-press changes within a reasonable UX window.
     poll_interval_seconds = 60
+    # dev505 doesn't beep on connect, so the vendor app can share it.
+    default_link_policy = LinkPolicy.ON_DEMAND
 
     _ORDER_LEN = 20 # bytes between FEEF and EFFF
 
@@ -1451,6 +1473,11 @@ class AromaWaveProtocol(BleProtocol):
         # Polarity is inverted on this firmware: 0x00 = on, 0x01 = off
         # (confirmed against the live device).
         return self._build_envelope(0x000E, 0 if on else 1)
+
+    def build_handshake(self, password: str | None = None) -> list[bytes]:
+        # Time sync first: without it control writes complete but the
+        # diffuser doesn't actuate.
+        return super().build_handshake() + self.build_connect_init()
 
     def build_connect_init(self) -> list[bytes]:
         """Frames the app sends after connect before any command:

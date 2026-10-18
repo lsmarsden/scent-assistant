@@ -1,32 +1,23 @@
 """Unified device manager for scent diffusers.
 
-Holds a persistent BLE connection per device managed by a supervisor task
-that reconnects on drop with exponential backoff. Push notifications and
-external state changes flow naturally; commands are sent over the live link.
+Turns HA-level commands into protocol frames, sends them over the BLE link
+(link.py, which owns the connection and its policy) or the Aroma-Link
+cloud, and folds the device's notifications into DiffuserState.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 
-from bleak import BleakClient, BleakError
-from bleak_retry_connector import (
-    BLEAK_RETRY_EXCEPTIONS,
-    BleakNotFoundError,
-    close_stale_connections_by_address,
-    establish_connection,
-)
-
-from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
 from .const import (
     DeviceType,
-    DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_WORK_DURATION,
     DEFAULT_PAUSE_DURATION,
+    LinkPolicy,
 )
+from .link import BleLink
 from .protocol_ble import (
     BleProtocol,
     DiffuserState,
@@ -40,18 +31,15 @@ from .protocol_ble import (
     ScentimentProtocol,
     ScentMarketingAkProtocol,
     ScentMarketingGwProtocol,
-    ScentMarketingGwXorProtocol,
     get_protocol,
     detect_device_type,
-    protocol_from_services,
 )
 from .protocol_cloud import AromaLinkCloudClient
 
 _LOGGER = logging.getLogger(__name__)
 
-# Reconnect backoff for the BLE supervisor task (seconds).
-BLE_BACKOFF_INITIAL = 5
-BLE_BACKOFF_MAX = 60
+# How long a command waits for the device's response notification.
+COMMAND_SETTLE_SECONDS = 1.0
 
 
 class ScentDiffuserDevice:
@@ -67,52 +55,40 @@ class ScentDiffuserDevice:
         cloud_device_id: str | None = None,
         sm_metadata: dict | None = None,
         gw_password: str | None = None,
+        link_policy: LinkPolicy | None = None,
     ) -> None:
-        # HA ref used to look up cached BLEDevice objects from
-        # BT integration. Optional so existing tests
-        # still work without HA constructed.
-        # runtime supplies from async_setup_entry
-        self._hass = hass
         # Detection metadata from the config flow — populated only for
         # Scent Marketing family devices.
         self._sm_metadata = sm_metadata or {}
-        # Optional 4-char ASCII password for Scent Marketing GW devices.
-        # Sent proactively after every BLE connect.
-        self._gw_password = gw_password or None
-        # Trace ring-buffer for the diagnostics download.
-        self._recent_notifications: list[str] = []
-        self._recent_commands: list[str] = []
-        # BLE
         self._ble_address = ble_address
         self._ble_name = ble_name or ""
-        self._ble_client: BleakClient | None = None
-        self._ble_connected = False
-        self._ble_lock = asyncio.Lock()
-        self._ble_supervisor_task: asyncio.Task | None = None
-        self._ble_poll_task: asyncio.Task | None = None
-        self._ble_disconnect_event = asyncio.Event()
-        self._ble_stop = False
-        self._ble_has_synced_time = False
-        # Set once successfuloly reconciled protocol against the
-        # device GATT layout so we don't log override every reconnect
-        self._protocol_locked = False
 
         # Device type
-        if device_type:
-            self._device_type = device_type
-        elif ble_name:
+        if not device_type:
             # No advertisement object available at this point — fall back to
             # name-only detection (config flow performs the richer
             # advertisement-aware detection up front and persists the result).
-            self._device_type = detect_device_type(ble_name) or DeviceType.AROMA_LINK
-        else:
-            self._device_type = DeviceType.AROMA_LINK
+            device_type = (detect_device_type(ble_name) if ble_name else None) or DeviceType.AROMA_LINK
 
         # Protocol handler. GW-XOR needs the MAC for its keystream; GW
         # devices with PID 98 use the Tuya-DP hex parser.
         mac = (ble_address or "").replace(":", "")
-        pid = self._sm_metadata.get("pid") if self._sm_metadata else None
-        self._protocol: BleProtocol = get_protocol(self._device_type, mac=mac, pid=pid)
+        pid = self._sm_metadata.get("pid")
+        protocol = get_protocol(device_type, mac=mac, pid=pid)
+
+        # BLE: the link owns the protocol from here, since the GATT layout
+        # at first connect can replace it.
+        self._link: BleLink | None = None
+        self._cloud_protocol: BleProtocol = protocol
+        if ble_address:
+            self._link = BleLink(
+                hass, ble_address, self._ble_name, protocol,
+                policy=link_policy or protocol.default_link_policy,
+                password=gw_password or None,
+                pid=pid,
+                on_frame=self._on_frame,
+                on_change=self._notify_state_changed,
+            )
 
         # Cloud
         self._cloud: AromaLinkCloudClient | None = cloud_client
@@ -135,8 +111,22 @@ class ScentDiffuserDevice:
         return self._ble_address or self._cloud_device_id or "unknown"
 
     @property
+    def _protocol(self) -> BleProtocol:
+        return self._link.protocol if self._link else self._cloud_protocol
+
+    @property
     def device_type(self) -> DeviceType:
-        return self._device_type
+        return self._protocol.device_type
+
+    @property
+    def link_policy(self) -> LinkPolicy | None:
+        return self._link.policy if self._link else None
+
+    @property
+    def link_held(self) -> bool | None:
+        """Whether a persistent BLE link holds the connection (None when the
+        link is on-demand or there is no BLE link)."""
+        return self._link.held if self._link else None
 
     @property
     def sm_metadata(self) -> dict:
@@ -145,11 +135,11 @@ class ScentDiffuserDevice:
 
     @property
     def recent_notifications(self) -> list[str]:
-        return list(self._recent_notifications)
+        return list(self._link.recent_notifications) if self._link else []
 
     @property
     def recent_commands(self) -> list[str]:
-        return list(self._recent_commands)
+        return list(self._link.recent_commands) if self._link else []
 
     @property
     def model_name(self) -> str:
@@ -167,7 +157,7 @@ class ScentDiffuserDevice:
             DeviceType.SCENT_MARKETING_GW: "Scent Marketing (GW)",
             DeviceType.SCENT_MARKETING_GW_XOR: "Scent Marketing (GW, encrypted)",
         }
-        base = mapping.get(self._device_type, self._device_type.value)
+        base = mapping.get(self.device_type, self.device_type.value)
         # Append the PID when known — different OEMs share the same family
         # but have distinct PIDs, useful for triage.
         pid = self._sm_metadata.get("pid")
@@ -207,6 +197,8 @@ class ScentDiffuserDevice:
 
     @property
     def available(self) -> bool:
+        if self._link:
+            return self._link.available
         return self.connection_mode != "offline"
 
     def register_state_callback(self, callback: callable) -> None:
@@ -220,252 +212,26 @@ class ScentDiffuserDevice:
                 _LOGGER.exception("Error in state callback")
 
     # ------------------------------------------------------------------
-    # BLE persistent connection
+    # BLE link
     # ------------------------------------------------------------------
 
-    async def _ensure_connected(self) -> bool:
-        """Establish BLE connection if not already up. Called by the supervisor."""
-        if not self._ble_address:
-            return False
-
-        if self._ble_connected and self._ble_client and self._ble_client.is_connected:
-            return True
-
-        async with self._ble_lock:
-            if self._ble_connected and self._ble_client and self._ble_client.is_connected:
-                return True
-
-            try:
-                _LOGGER.debug("BLE connecting to %s", self._ble_name)
-                ble_device = self._resolve_ble_device()
-                if ble_device is None:
-                    _LOGGER.warning(
-                        "BLE device %s (%s) is not currently discoverable to HA."
-                        "Command will retry on next attempt.",
-                        self._ble_name, self._ble_address
-                    )
-                    return False
-
-                # Some adapters hang on to half-open connection
-                # from prev attempt; bleak-retry-connector cleans them up
-                await close_stale_connections_by_address(self._ble_address)
-
-                self._ble_client = await establish_connection(
-                    BleakClient,
-                    ble_device,
-                    self._ble_name or self._ble_address,
-                    disconnected_callback=self._on_ble_disconnect,
-                    max_attempts=3,
-                )
-                self._ble_connected = True
-
-                # reconcile protocol against device GATT
-                # layout. reuses common case where device was
-                # added before HA cached manufacturer data and
-                # config flow recorded AROMA_LINK fallback
-                self._reconcile_protocol_from_gatt()
-
-                # Subscribe to notifications for responses
-                try:
-                    await self._ble_client.start_notify(
-                        self._protocol.notify_char_uuid, self._on_ble_notification
-                    )
-                except Exception as err:
-                    _LOGGER.debug("Could not subscribe to notifications: %s", err)
-
-                # Time sync on first connection of this session (skipped for
-                # protocols that don't support it).
-                if not self._ble_has_synced_time:
-                    time_sync = self._protocol.build_time_sync()
-                    if time_sync:
-                        await self._ble_send(time_sync)
-                        _LOGGER.info("BLE connected + time synced: %s", self._ble_name)
-                    else:
-                        _LOGGER.info("BLE connected: %s", self._ble_name)
-                    self._ble_has_synced_time = True
-
-                    # AromaWave: the app issues a 02 (auth/unlock) read before
-                    # any command. Config writes are accepted without it but
-                    # active control (power, mode enable) appears gated behind
-                    # it. Send it once on connect, after time sync.
-                    if isinstance(self._protocol, AromaWaveProtocol):
-                        for frame in self._protocol.build_connect_init():
-                            await self._ble_send(frame)
-
-                # GW family password handshake. We send unconditionally —
-                # the firmware ignores a password write on unprotected
-                # devices, and there's no reliable pre-connect way to tell
-                # which mode the device is in.
-                if self._gw_password and isinstance(
-                    self._protocol, ScentMarketingGwProtocol
-                ):
-                    try:
-                        await self._ble_send(self._protocol.build_password(self._gw_password))
-                    except Exception as err:
-                        _LOGGER.debug("Scent Marketing GW: password send failed: %s", err)
-
-                return True
-
-            except BleakNotFoundError as err:
-                _LOGGER.warning("BLE device %s not found: %s", self._ble_name, err)
-                self._ble_connected = False
-                return False
-            except BLEAK_RETRY_EXCEPTIONS as err:
-                _LOGGER.warning("BLE connect failed for %s: %s", self._ble_name, err)
-                self._ble_connected = False
-                return False
-
-    def _resolve_ble_device(self):
-        """Look up cahced BLEDevice fomr HA BT integration.
-
-        returns None if HA hasn't seen this address recently."""
-        if self._hass is None:
-            return None
-        return bluetooth.async_ble_device_from_address(
-            self._hass, self._ble_address, connectable=True
-        )
-
-    def _on_ble_disconnect(self, _client: BleakClient) -> None:
-        """Active disconnect handler. Resets per-connection state and wakes
-        the supervisor so it reconnects with backoff."""
-        self._ble_connected = False
-        #Re-run time sync and GW password handshake on the next connect.
-        self._ble_has_synced_time = False
-        self._ble_disconnect_event.set()
-
-    def _reconcile_protocol_from_gatt(self) -> None:
-        """Switch protocol if GATT layout disagrees with cached type.
-
-        Runs once per device manager lifetime. handles case when
-        config flow stored AROMA_LINK as fallback due to no
-        manufact. data visible during scan."""
-        if self._protocol_locked or not self._ble_client:
-            return
-        try:
-            services = self._ble_client.services
-        except Exception:
-            return
-        if services is None:
-            return
-
-        # One-time GATT dump per device lifetime so we can diagnose unknown
-        # protocols / unverified UUIDs (e.g. AromaWave) without asking for
-        # another PacketLogeger capture.
-        for s in services:
-            _LOGGER.info("GATT service %s", s.uuid)
-            for c in s.characteristics:
-                _LOGGER.info(
-                    "  char %s handle=0x%04X props=%s",
-                    c.uuid, c.handle, ",".join(c.properties),
-                )
-
-        detected = protocol_from_services(services)
-        self._protocol_locked = True
-        if detected is None or detected == self._device_type:
-            return
-    #     don't downgrade XOR encrypted GW back to plain GW
-        if (
-            detected == DeviceType.SCENT_MARKETING_GW
-            and self._device_type == DeviceType.SCENT_MARKETING_GW_XOR
-        ):
-            return
-
-        _LOGGER.warning(
-            "GATT layout for %s indicates %s, switching from %s",
-            self._ble_name or self._ble_address,
-            detected.value, self._device_type.value,
-        )
-        self._device_type = detected
-        mac = (self._ble_address or "").replace(":", "")
-        pid = self._sm_metadata.get("pid") if self._sm_metadata else None
-        self._protocol = get_protocol(detected, mac=mac, pid=pid)
-    #     force time sync to re-run with new protocol layout
-        self._ble_has_synced_time = False
-
-
-    async def _ble_supervisor(self) -> None:
-        """Hold a persistent BLE connection; reconnect-on-drop with backoff.
-
-        The supervisor connects eagerly, then sleeps until `_on_ble_disconnect`
-        signals a drop. Failures back off exponentially up to BLE_BACKOFF_MAX
-        so a temporarily out-of-range device doesn't spin the BT adapter."""
-        backoff = BLE_BACKOFF_INITIAL
-        while not self._ble_stop:
-            ok = await self._ensure_connected()
-            if not ok:
-                await asyncio.sleep(backoff)
-                backoff = min(BLE_BACKOFF_MAX, backoff * 2)
-                continue
-            backoff = BLE_BACKOFF_INITIAL
-            self._ble_disconnect_event.clear()
-            await self._ble_disconnect_event.wait()
-
-    async def _ble_poll_loop(self) -> None:
-        """Periodically send the protocol's status poll over the live link.
-
-        Only runs for protocols that declare a poll interval and implement
-        build_poll() (currently AromaWave). Devices that push state changes
-        autonomously (Ascent/GW) leave both at their defaults and no poll
-        task is started."""
-        interval = self._protocol.poll_interval_seconds or 0
-        if interval <= 0:
-            return
-        while not self._ble_stop:
-            await asyncio.sleep(interval)
-            if self._ble_stop:
-                return
-            if not self._ble_connected:
-                continue
-            frame = self._protocol.build_poll()
-            if not frame:
-                continue
-            try:
-                await self._ble_send(frame)
-            except Exception as err:
-                _LOGGER.debug("BLE poll send failed: %s", err)
-
     async def _ble_send(self, data: bytes) -> bool:
-        """Send a command via BLE.
-
-        Protocols may return more than one on-wire chunk per command — the
-        Scent Marketing GW family for instance needs (nonce, seq)-prefixed
-        18-byte chunks. We delegate the split decision to the protocol and
-        write each chunk sequentially.
-        """
-        if not self._ble_client or not self._ble_client.is_connected:
-            return False
-        chunks = self._protocol.wire_chunks(data) if data else []
-        if chunks:
-            self._recent_commands.append(data.hex())
-            if len(self._recent_commands) > 10:
-                del self._recent_commands[0]
-        for chunk in chunks:
-            try:
-                await self._ble_client.write_gatt_char(
-                    self._protocol.write_char_uuid, chunk, response=True
-                )
-            except (BleakError, asyncio.TimeoutError, OSError) as err:
-                _LOGGER.warning("BLE write failed: %s", err)
-                return False
-        return True
+        return await self._link.send(data) if self._link else False
 
     async def _ble_execute(self, data: bytes) -> bool:
-        """Send a command and wait briefly for the notification response.
-
-        Connection is held by the supervisor task - if it isn't currently up
-        the write fails and HA surfaces it as a transient command failure."""
+        """Send a command and wait briefly for the notification response."""
         success = await self._ble_send(data)
         if success:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(COMMAND_SETTLE_SECONDS)
         return success
 
-    def _on_ble_notification(self, sender: int, data: bytearray) -> None:
-        """Handle incoming BLE notification."""
-        raw = bytes(data)
-        # Keep a short ring-buffer of raw frames for the diagnostics export.
-        self._recent_notifications.append(raw.hex())
-        if len(self._recent_notifications) > 20:
-            del self._recent_notifications[0]
+    async def set_hold_connection(self, held: bool) -> None:
+        """Hold or release a persistent link (see BleLink.set_held)."""
+        if self._link:
+            await self._link.set_held(held)
+
+    def _on_frame(self, raw: bytes) -> None:
+        """Fold one BLE notification into the device state."""
         updates = self._protocol.parse_notification(raw)
         if not updates:
             return
@@ -781,7 +547,7 @@ class ScentDiffuserDevice:
         # Try BLE
         if self._ble_address:
             cmd = None
-            if self._device_type == DeviceType.TUYA_BLE:
+            if self.device_type == DeviceType.TUYA_BLE:
                 setup = ScheduleSetup(
                     index=0, weekday_mask=weekday_mask, enabled=enabled,
                     start_hour=s_h, start_minute=s_m, end_hour=e_h, end_minute=e_m,
@@ -845,7 +611,7 @@ class ScentDiffuserDevice:
 
     async def sync_time(self) -> bool:
         """Re-send the time-sync frame on the live connection."""
-        if not self._ble_address or not self._ble_connected:
+        if not self._link:
             return False
         time_sync = self._protocol.build_time_sync()
         if not time_sync:
@@ -857,27 +623,13 @@ class ScentDiffuserDevice:
     # ------------------------------------------------------------------
 
     async def async_setup(self) -> None:
-        """Start the BLE supervisor task so the connection comes up eagerly.
-        Also start a poll task for protocols that need periodic polling."""
-        if self._ble_address:
-            self._ble_stop = False
-            self._ble_supervisor_task = asyncio.ensure_future(self._ble_supervisor())
-            if self._protocol.poll_interval_seconds:
-                self._ble_poll_task = asyncio.ensure_future(self._ble_poll_loop())
+        """Start the BLE link (persistent links connect eagerly)."""
+        if self._link:
+            await self._link.start()
 
     async def async_shutdown(self) -> None:
         """Clean up resources."""
-        self._ble_stop = True
-        self._ble_disconnect_event.set()
-        if self._ble_supervisor_task and not self._ble_supervisor_task.done():
-            self._ble_supervisor_task.cancel()
-        if self._ble_poll_task and not self._ble_poll_task.done():
-            self._ble_poll_task.cancel()
-        if self._ble_client:
-            try:
-                if self._ble_client.is_connected:
-                    await self._ble_client.disconnect()
-            except Exception:
-                pass
+        if self._link:
+            await self._link.stop()
         if self._cloud and hasattr(self._cloud, "close"):
             await self._cloud.close()

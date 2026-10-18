@@ -21,10 +21,12 @@ from .const import (
     CONF_CLOUD_PASSWORD,
     CONF_CLOUD_DEVICE_ID,
     CONF_CONNECTION_MODE,
+    CONF_LINK_POLICY,
     CLOUD_POLL_INTERVAL_SECONDS,
     WEEKDAY_MON, WEEKDAY_TUE, WEEKDAY_WED, WEEKDAY_THU,
     WEEKDAY_FRI, WEEKDAY_SAT, WEEKDAY_SUN,
     DeviceType,
+    LinkPolicy,
 )
 from .device import ScentDiffuserDevice
 from .protocol_ble import ScheduleSlot, ScheduleSetup
@@ -97,6 +99,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cloud_device_id=cloud_device_id,
         sm_metadata=entry.data.get("sm_metadata"),
         gw_password=entry.data.get("gw_password"),
+        link_policy=(LinkPolicy(entry.options[CONF_LINK_POLICY])
+                     if CONF_LINK_POLICY in entry.options else None),
     )
 
     # BLE: starts the persistent connection supervisor tasks. Cloud: no-.
@@ -179,7 +183,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options))
     return True
+
+
+async def _async_reload_on_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A changed connection policy takes effect on reload."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -139,6 +139,15 @@ The set of entities depends on which device family is connected.
 | LED | Light | RGB color picker + on/off |
 | Battery | Sensor | Battery percentage |
 
+### Bluetooth connection
+
+Each Bluetooth device uses one of two connection policies, set under the integration's **Configure** options:
+
+- **Always connected** (default for most families): HA holds the connection and reconnects when it drops, so state updates are instant and commands don't make the device beep. A **Hold connection** switch turns this off when you want the vendor app (most diffusers accept only one connection); HA then connects briefly for any command and takes the connection back after 10 minutes.
+- **Connect for each command** (default for Aromawave): HA connects for a command, stays connected 30 s for follow-ups, and reads state every 5 minutes, leaving the device free for the app in between.
+
+Entities are unavailable while HA is neither connected to the device nor hearing its advertisements.
+
 ---
 
 ## &#x2699;&#xFE0F; Services
@@ -290,7 +299,8 @@ uv run pytest
 `uv` installs Python and the Home Assistant version pinned in `pyproject.toml` (bump it together with production HA). The tests cover the Scent Marketing GW and Aroma Wave families in three layers:
 
 - `tests/protocol/`: frame builders and parsers, compared byte for byte with PacketLogger captures of the vendor apps (`tests/fixtures/captures/`).
-- `tests/device/`: the device manager's connection lifecycle and commands, over a fake BLE link with a virtual clock (`tests/fakes.py`).
+- `tests/link/`: the BLE link's connection lifecycle and policy (persistent, released, on-demand, availability), over a fake Bluetooth stack with a virtual clock (`tests/fakes.py`). One test class per rule.
+- `tests/device/`: commands and notifications through the device manager.
 - `tests/integration/`: config flow, entity set and services in a real Home Assistant test instance.
 
 Tests marked `xfail(strict=True)` record known differences from the vendor app; fixing one makes its test pass, and strict mode then asks you to drop the marker.

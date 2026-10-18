@@ -7,6 +7,13 @@ DOMAIN = "scent_assistant"
 # Device types
 # ---------------------------------------------------------------------------
 
+class LinkPolicy(StrEnum):
+    """When the BLE connection to a diffuser is held (see link.py)."""
+
+    PERSISTENT = "persistent"  # hold one connection, reconnect on drop
+    ON_DEMAND = "on_demand"    # connect per command, linger, disconnect
+
+
 class DeviceType(StrEnum):
     TUYA_BLE = "tuya_ble"          # ShinePick QT-I300 and similar
     AROMA_LINK = "aroma_link"      # Aroma-Link WiFi+BLE diffusers
@@ -297,6 +304,7 @@ CONF_CONNECTION_MODE = "connection_mode"
 # firmware sometimes ships locked; setting this lets the device accept
 # our control commands).
 CONF_GW_PASSWORD = "gw_password"
+CONF_LINK_POLICY = "link_policy"  # options flow override of the protocol default
 
 # ---------------------------------------------------------------------------
 # Defaults

@@ -9,6 +9,7 @@ from bleak import BleakScanner
 
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
+from homeassistant.core import callback
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 from .const import (
@@ -22,10 +23,12 @@ from .const import (
     CONF_CLOUD_USER_ID,
     CONF_CONNECTION_MODE,
     CONF_GW_PASSWORD,
+    CONF_LINK_POLICY,
     DEFAULT_SCAN_TIMEOUT,
     DeviceType,
+    LinkPolicy,
 )
-from .protocol_ble import detect_device_type, extract_scent_marketing_metadata
+from .protocol_ble import detect_device_type, extract_scent_marketing_metadata, get_protocol
 from .protocol_cloud import AromaLinkCloudClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +49,13 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle config flow for Scent Diffuser."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> ScentDiffuserOptionsFlow:
+        return ScentDiffuserOptionsFlow()
 
     def __init__(self) -> None:
         self._discovered_devices: dict[str, dict] = {}
@@ -371,5 +381,34 @@ class ScentDiffuserConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="cloud_device",
             data_schema=vol.Schema({
                 vol.Required(CONF_CLOUD_DEVICE_ID): vol.In(device_options),
+            }),
+        )
+
+
+_LINK_POLICY_LABELS = {
+    LinkPolicy.PERSISTENT.value: "Always connected (instant, but the vendor app can't connect)",
+    LinkPolicy.ON_DEMAND.value: "Connect for each command (shares the device with the app)",
+}
+
+
+class ScentDiffuserOptionsFlow(config_entries.OptionsFlow):
+    """Per-device connection policy for BLE entries."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        if self.config_entry.data.get(CONF_CONNECTION_MODE) != "ble":
+            return self.async_abort(reason="no_options")
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        device_type = DeviceType(self.config_entry.data.get(CONF_DEVICE_TYPE, "aroma_link"))
+        current = self.config_entry.options.get(
+            CONF_LINK_POLICY, get_protocol(device_type).default_link_policy.value
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Required(CONF_LINK_POLICY, default=current): vol.In(_LINK_POLICY_LABELS),
             }),
         )

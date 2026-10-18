@@ -53,6 +53,8 @@ class DiffuserStartTime(TimeEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -94,6 +96,8 @@ class DiffuserEndTime(TimeEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -133,6 +137,8 @@ class AromaWaveModeStartTime(TimeEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -166,6 +172,8 @@ class AromaWaveModeEndTime(TimeEntity):
         device.register_state_callback(self._on_state_update)
 
     def _on_state_update(self) -> None:
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property

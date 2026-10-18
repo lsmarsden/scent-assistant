@@ -1,10 +1,12 @@
-"""A fake BLE link for driving ScentDiffuserDevice without a radio.
+"""A fake Bluetooth stack for driving BleLink and ScentDiffuserDevice
+without a radio.
 
-device.py reaches Bluetooth through three calls: HA's BLEDevice lookup,
-close_stale_connections_by_address and establish_connection. FakeLink.install
-replaces all three (plus device.py's asyncio.sleep, with a virtual clock) and
-hands out FakeBleakClient instances, so tests exercise the device manager
-through its public methods only.
+link.py reaches Bluetooth through bleak-retry-connector (establish_connection,
+close_stale_connections_by_address) and HA's bluetooth helpers (BLEDevice
+lookup, presence, advertisement and unavailable callbacks). FakeBluetooth
+replaces them, plus asyncio.sleep in link.py and device.py with a virtual
+clock, and hands out FakeBleakClient instances. Tests then drive the link
+and the device manager through their public interfaces only.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import pytest
 from bleak import BleakError
 
 from custom_components.scent_assistant import device as device_module
+from custom_components.scent_assistant import link as link_module
 
 GW_ADDRESS = "AA:BB:CC:DD:EE:01"
 AW_ADDRESS = "AA:BB:CC:DD:EE:02"
@@ -45,7 +48,9 @@ class FakeBleakClient:
         self.writes.append((uuid, bytes(data)))
 
     async def disconnect(self) -> None:
-        self.is_connected = False
+        # Like bleak, our own disconnect also fires the callback.
+        if self.is_connected:
+            self.drop()
 
     def drop(self) -> None:
         """The peripheral went away."""
@@ -61,11 +66,13 @@ class FakeBleakClient:
         return [data for u, data in self.writes if uuid is None or u == uuid]
 
 
-class FakeLink:
-    """Controls what the device manager sees of the Bluetooth stack."""
+class FakeBluetooth:
+    """Controls what the link sees of the Bluetooth stack."""
 
     def __init__(self) -> None:
-        self.visible = True
+        self.visible = True  # advertising, so HA can see and connect to it
+        self._advertisement_callbacks: list[Callable] = []
+        self._unavailable_callbacks: list[Callable] = []
         self.connect_errors: list[Exception] = []
         self.services: list = []
         self.clients: list[FakeBleakClient] = []
@@ -78,20 +85,52 @@ class FakeLink:
     def client(self) -> FakeBleakClient:
         return self.clients[-1]
 
+    @property
+    def connected_clients(self) -> list[FakeBleakClient]:
+        return [c for c in self.clients if c.is_connected]
+
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def no_stale_connections(address: str) -> None:
             return None
 
-        monkeypatch.setattr(device_module, "establish_connection", self.establish_connection)
-        monkeypatch.setattr(device_module, "close_stale_connections_by_address",
+        bt = link_module.bluetooth
+        monkeypatch.setattr(link_module, "establish_connection", self.establish_connection)
+        monkeypatch.setattr(link_module, "close_stale_connections_by_address",
                             no_stale_connections)
-        monkeypatch.setattr(device_module.bluetooth, "async_ble_device_from_address",
-                            self.lookup)
-        # Only device.py's view of asyncio gets the virtual clock.
-        monkeypatch.setattr(device_module, "asyncio", _AsyncioWithClock(self.sleep))
+        monkeypatch.setattr(bt, "async_ble_device_from_address", self.lookup)
+        monkeypatch.setattr(bt, "async_address_present", self.present)
+        monkeypatch.setattr(bt, "async_register_callback", self.register_callback)
+        monkeypatch.setattr(bt, "async_track_unavailable", self.track_unavailable)
+        # Only link.py's and device.py's view of asyncio gets the virtual clock.
+        clock = _AsyncioWithClock(self.sleep)
+        monkeypatch.setattr(link_module, "asyncio", clock)
+        monkeypatch.setattr(device_module, "asyncio", clock)
 
     def lookup(self, hass, address: str, connectable: bool = True):
         return SimpleNamespace(address=address) if self.visible else None
+
+    def present(self, hass, address: str, connectable: bool = True) -> bool:
+        return self.visible
+
+    def register_callback(self, hass, callback, matcher, mode):
+        self._advertisement_callbacks.append(callback)
+        return lambda: self._advertisement_callbacks.remove(callback)
+
+    def track_unavailable(self, hass, callback, address, connectable=True):
+        self._unavailable_callbacks.append(callback)
+        return lambda: self._unavailable_callbacks.remove(callback)
+
+    def appear(self) -> None:
+        """The device starts advertising."""
+        self.visible = True
+        for callback in list(self._advertisement_callbacks):
+            callback(SimpleNamespace(), "advertisement")
+
+    def vanish(self) -> None:
+        """HA's Bluetooth stops hearing the device."""
+        self.visible = False
+        for callback in list(self._unavailable_callbacks):
+            callback(SimpleNamespace())
 
     async def establish_connection(self, client_class, ble_device, name, *,
                                    disconnected_callback=None, **kwargs):
