@@ -8,12 +8,14 @@ import pytest
 
 from custom_components.scent_assistant.const import SM_GW_HEARTBEAT_HEX
 from custom_components.scent_assistant.protocol_ble import (
+    GwModeTasks,
+    GwTask,
     ScentMarketingGwProtocol,
-    ScheduleSlot,
 )
 from tests.captures import (
     capture_names,
     gw_app_writes,
+    gw_app_writes_after_state,
     gw_device_frames,
     gw_dps,
     gw_messages,
@@ -21,13 +23,6 @@ from tests.captures import (
 )
 
 GW = "gw"
-ALL_DAY = ScheduleSlot(start_hour=0, start_minute=0, end_hour=23, end_minute=59, enabled=True)
-
-QUICK_FRAGRANCE_CLOBBERED = pytest.mark.xfail(
-    strict=True,
-    reason="DP-4 writes hard-code the quick-fragrance duration to 0x28; the app "
-           "writes back the value the device reported (0x2b/0x2c here)",
-)
 
 
 @pytest.fixture
@@ -126,29 +121,85 @@ def test_time_sync_matches_app(proto: ScentMarketingGwProtocol) -> None:
     assert proto.build_time_sync(datetime(2026, 5, 15, 18, 48, 33)) == app_frame
 
 
-@pytest.mark.parametrize(("name", "index", "grade"), [
-    ("grade_3", 0, 3),
-    ("grade_1_then_off", 0, 1),
-    pytest.param("app_session", 6, 2, marks=QUICK_FRAGRANCE_CLOBBERED),
-])
-def test_grade_schedule_matches_app(
-    proto: ScentMarketingGwProtocol, name: str, index: int, grade: int
-) -> None:
-    # The app sends power + DP-4 together; set_grade sends DP-4 alone.
-    app_dp4 = gw_dps(app_write(name, index))[4]
-    ours = proto.build_schedule([ALL_DAY], weekday_mask=0x7F, grade=grade)
-    assert gw_dps(ours) == {4: app_dp4}
+# ---------------------------------------------------------------------------
+# DP-4 mode tasks: decode the device's value, change one field, write it back
+# ---------------------------------------------------------------------------
+
+def device_dp4_payloads() -> list[bytes]:
+    return [
+        dps[4][3:] for name in capture_names(GW)
+        for frame in gw_device_frames(load_capture(GW, name))
+        if 4 in (dps := gw_dps(frame))
+    ]
 
 
-@pytest.mark.parametrize(("name", "work", "pause"), [
-    ("customise_10s_120s", 10, 120),
-    pytest.param("customise_5s_60s", 5, 60, marks=QUICK_FRAGRANCE_CLOBBERED),
-])
-def test_customise_matches_app(
-    proto: ScentMarketingGwProtocol, name: str, work: int, pause: int
+def app_dp4(frame: bytes) -> GwModeTasks:
+    return GwModeTasks.decode(gw_dps(frame)[4][3:])
+
+
+def test_mode_tasks_round_trip() -> None:
+    payloads = set(device_dp4_payloads())
+    assert len(payloads) >= 5
+    for payload in payloads:
+        assert GwModeTasks.decode(payload).encode() == payload
+
+
+def test_mode_tasks_decode() -> None:
+    mode_tasks = GwModeTasks.decode(gw_dps(device_frame("grade_3", 1))[4][3:])
+    assert (mode_tasks.run, mode_tasks.grade, mode_tasks.quick_fragrance) == (1, 3, 0x28)
+    assert mode_tasks.tasks == (GwTask(enabled=True, weekday_mask=0x7F, start_hour=0,
+                                       start_minute=0, end_hour=23, end_minute=59),)
+
+
+def test_mode_tasks_rejects_wrong_length() -> None:
+    payload = device_dp4_payloads()[0]
+    assert GwModeTasks.decode(payload[:-1]) is None
+    assert GwModeTasks.decode(payload + b"\x00") is None
+
+
+def writes_after_state(with_customise: bool) -> list:
+    """App grade/customise writes made after the device had reported DP-4."""
+    return [
+        pytest.param(frame, before, id=f"{name}-{i}")
+        for name in capture_names(GW)
+        for i, (frame, before) in enumerate(gw_app_writes_after_state(load_capture(GW, name), 4))
+        if (15 in gw_dps(frame)) == with_customise and app_dp4(frame).run == 0x01
+    ]
+
+
+@pytest.mark.parametrize(("app_frame", "device_dp4"), writes_after_state(with_customise=False))
+def test_grade_write_keeps_device_state(
+    proto: ScentMarketingGwProtocol, app_frame: bytes, device_dp4: bytes
 ) -> None:
-    app = gw_dps(app_write(name, 0))
-    ours = gw_dps(proto.build_customize(work, pause))
+    # The device reported quick fragrance 0x2c here; a grade change keeps it.
+    grade = app_dp4(app_frame).grade
+    ours = proto.build_mode_tasks(GwModeTasks.decode(device_dp4).with_grade(grade))
+    assert gw_dps(ours) == {4: gw_dps(app_frame)[4]}
+
+
+@pytest.mark.parametrize(("app_frame", "device_dp4"), writes_after_state(with_customise=True))
+def test_customise_write_keeps_device_state(
+    proto: ScentMarketingGwProtocol, app_frame: bytes, device_dp4: bytes
+) -> None:
+    app = gw_dps(app_frame)
+    work, pause = int.from_bytes(app[15][3:5]), int.from_bytes(app[15][5:7])
+    ours = gw_dps(proto.build_customize(
+        work, pause, GwModeTasks.decode(device_dp4).with_grade(0)))
+    assert ours == {4: app[4], 15: app[15]}
+
+
+@pytest.mark.parametrize(("name", "grade"), [("grade_3", 3), ("grade_1_then_off", 1)])
+def test_grade_write_before_any_state_matches_app(
+    proto: ScentMarketingGwProtocol, name: str, grade: int
+) -> None:
+    # Captured from app start: no device push yet, so defaults must match.
+    ours = proto.build_mode_tasks(GwModeTasks().with_grade(grade))
+    assert gw_dps(ours) == {4: gw_dps(app_write(name, 0))[4]}
+
+
+def test_customise_before_any_state_matches_app(proto: ScentMarketingGwProtocol) -> None:
+    app = gw_dps(app_write("customise_10s_120s", 0))
+    ours = gw_dps(proto.build_customize(10, 120, GwModeTasks().with_grade(0)))
     assert ours == {4: app[4], 15: app[15]}
 
 

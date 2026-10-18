@@ -32,6 +32,8 @@ from .protocol_ble import (
     DiffuserState,
     AromaWaveMode,
     AromaWaveProtocol,
+    GwModeTasks,
+    GwTask,
     ScheduleSlot,
     ScheduleSetup,
     AromaLinkBleProtocol,
@@ -532,6 +534,9 @@ class ScentDiffuserDevice:
         if "firmware_version" in updates:
             self._state.firmware_version = updates["firmware_version"]
             changed = True
+        if "gw_mode_tasks" in updates:
+            self._state.gw_mode_tasks = updates["gw_mode_tasks"]
+            changed = True
         if "aromawave_mode_updates" in updates:
             for mode_idx, fields in updates["aromawave_mode_updates"].items():
                 mode = self._state.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
@@ -651,34 +656,37 @@ class ScentDiffuserDevice:
             return False
         work = max(5, min(35, int(work_seconds)))
         pause = max(60, min(300, int(pause_seconds)))
-        cmd = self._protocol.build_customize(work, pause)
+        mode_tasks = self._gw_mode_tasks().with_grade(0)
+        cmd = self._protocol.build_customize(work, pause, mode_tasks)
         if await self._ble_execute(cmd):
             self._state.work_seconds = work
             self._state.pause_seconds = pause
             self._state.grade = 0
+            self._state.gw_mode_tasks = mode_tasks
             self._notify_state_changed()
             return True
         return False
 
     async def set_grade(self, grade: int) -> bool:
-        """Set the GW spray grade (1-5). Re-emits DP-4 with an all-day
-        all-week task and the requested grade in the sentinel."""
+        """Set the GW spray grade (1-5), keeping the rest of DP-4 as the
+        device last reported it."""
         if not self._ble_address:
             return False
         if not isinstance(self._protocol, ScentMarketingGwProtocol):
             return False
         grade = max(1, min(5, int(grade)))
-        slot = ScheduleSlot(
-            start_hour=0, start_minute=0,
-            end_hour=23, end_minute=59,
-            enabled=True
-        )
-        cmd = self._protocol.build_schedule([slot], weekday_mask=0x7F, grade=grade)
-        if await self._ble_execute(cmd):
+        mode_tasks = self._gw_mode_tasks().with_grade(grade)
+        if await self._ble_execute(self._protocol.build_mode_tasks(mode_tasks)):
             self._state.grade = grade
+            self._state.gw_mode_tasks = mode_tasks
             self._notify_state_changed()
             return True
         return False
+
+    def _gw_mode_tasks(self) -> GwModeTasks:
+        """The device's last pushed DP-4, or the app's defaults before one
+        has arrived (one all-day, all-week task)."""
+        return self._state.gw_mode_tasks or GwModeTasks()
 
     async def set_lamp(self, on: bool) -> bool:
         """Toggle auxiliary lamp (Scent Marketing AK lamp-bit, GW DP-11 light)."""
@@ -787,16 +795,12 @@ class ScentDiffuserDevice:
                 )
                 cmd = self._protocol.build_schedule(weekday_mask, [slot])
             elif isinstance(self._protocol, ScentMarketingGwProtocol):
-                slot = ScheduleSlot(
+                # Grade and the other DP-4 fields stay as the device reported.
+                mode_tasks = self._gw_mode_tasks().with_task(GwTask(
+                    enabled=enabled, weekday_mask=weekday_mask,
                     start_hour=s_h, start_minute=s_m, end_hour=e_h, end_minute=e_m,
-                    enabled=enabled, work_seconds=work, pause_seconds=pause,
-                )
-                #  preserve device's current grade (1-5); fall back to 1
-                # if we haven;t observed state push yet
-                grade = self._state.grade if self._state.grade else 1
-                cmd = self._protocol.build_schedule(
-                    [slot], weekday_mask=weekday_mask, grade=grade,
-                )
+                ))
+                cmd = self._protocol.build_mode_tasks(mode_tasks)
             elif isinstance(self._protocol, ScentMarketingAkProtocol):
                 slot = ScheduleSlot(
                     start_hour=s_h, start_minute=s_m, end_hour=e_h, end_minute=e_m,

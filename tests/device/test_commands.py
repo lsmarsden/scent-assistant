@@ -9,7 +9,13 @@ from custom_components.scent_assistant.const import (
     DeviceType,
 )
 from custom_components.scent_assistant.protocol_ble import ScentMarketingGwProtocol
-from tests.captures import aroma_wave_order, gw_dps, gw_messages, load_capture
+from tests.captures import (
+    aroma_wave_order,
+    gw_app_writes_after_state,
+    gw_dps,
+    gw_messages,
+    load_capture,
+)
 
 from tests.fakes import FakeLink
 
@@ -74,6 +80,27 @@ async def test_gw_customise(connected, link: FakeLink, requested, sent) -> None:
     dp15 = gw_dps(last_gw_frame(link))[15]
     assert (int.from_bytes(dp15[3:5]), int.from_bytes(dp15[5:7])) == sent
     assert (dev.state.work_seconds, dev.state.pause_seconds, dev.state.grade) == (*sent, 0)
+
+
+async def test_gw_grade_after_device_push_matches_app(connected, link: FakeLink) -> None:
+    # Replay the Scent Home session's device pushes up to the app's
+    # "grade 2" write, then make the same change through the device manager.
+    capture = load_capture("gw", "app_session")
+    app_frame, _ = gw_app_writes_after_state(capture, 4)[0]
+    dev = await connected(DeviceType.SCENT_MARKETING_GW)
+    app_chunks: list[bytes] = []
+    for direction, data in capture.events:
+        if direction == "rx":
+            link.client.notify(data)
+            continue
+        app_chunks.append(data)
+        if app_frame in [m.frame for m in gw_messages(app_chunks)]:
+            break  # the app sent its grade write here
+    assert dev.state.gw_mode_tasks.quick_fragrance == 0x2C
+
+    assert await dev.set_grade(2) is True
+
+    assert gw_dps(last_gw_frame(link))[4] == gw_dps(app_frame)[4]
 
 
 async def test_gw_lamp(connected, link: FakeLink) -> None:

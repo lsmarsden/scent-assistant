@@ -110,6 +110,31 @@ def gw_device_frames(capture: Capture) -> list[bytes]:
     return [m.frame for m in gw_messages(capture.notifications)]
 
 
+def gw_timeline(capture: Capture) -> list[tuple[str, bytes]]:
+    """Reassembled frames from both sides, in the order they completed."""
+    tx = iter(gw_messages(capture.writes))
+    rx = iter(gw_messages(capture.notifications))
+    timeline = []
+    for direction, chunk in capture.events:
+        if len(chunk) < GW_CHUNK:
+            source = tx if direction == "tx" else rx
+            timeline.append((direction, next(source).frame))
+    return timeline
+
+
+def gw_app_writes_after_state(capture: Capture, dp_id: int) -> list[tuple[bytes, bytes]]:
+    """(app frame, device's last DP-4 payload before it) for app writes of dp_id."""
+    last_dp4 = None
+    pairs = []
+    for direction, frame in gw_timeline(capture):
+        dps = gw_dps(frame)
+        if direction == "rx" and 4 in dps:
+            last_dp4 = dps[4][3:]
+        elif direction == "tx" and dp_id in dps and last_dp4 is not None:
+            pairs.append((frame, last_dp4))
+    return pairs
+
+
 # ---------------------------------------------------------------------------
 # Aroma Wave
 # ---------------------------------------------------------------------------

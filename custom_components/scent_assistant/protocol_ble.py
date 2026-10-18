@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .const import (
     DeviceType,
@@ -102,6 +102,7 @@ class DiffuserState:
     device_name: str | None = None     # user-set device name (DP 6)
     password_required: bool | None = None  # GW device demands password auth
     firmware_version: str | None = None    # PCB+MCU version string
+    gw_mode_tasks: "GwModeTasks | None" = None  # last DP-4 the device pushed
     #AromaWave: per-mode schedule, keyed by 1-based mode index
     aromawave_modes: dict[int, AromaWaveMode] = field(default_factory=dict)
 
@@ -752,6 +753,99 @@ class ScentMarketingAkProtocol(BleProtocol):
         return result
 
 
+@dataclass(frozen=True)
+class GwTask:
+    """One DP-4 interval task: [enabled<<7 | weekday_mask] SH SM EH EM + 2 bytes."""
+
+    enabled: bool = True
+    weekday_mask: int = 0x7F
+    start_hour: int = 0
+    start_minute: int = 0
+    end_hour: int = 23
+    end_minute: int = 59
+    tail: bytes = b"\x01\x01"  # always 01 01 in captures; meaning unknown
+
+    SIZE = 7
+
+    @classmethod
+    def decode(cls, data: bytes) -> GwTask:
+        return cls(
+            enabled=bool(data[0] & 0x80), weekday_mask=data[0] & 0x7F,
+            start_hour=data[1], start_minute=data[2],
+            end_hour=data[3], end_minute=data[4], tail=bytes(data[5:7]),
+        )
+
+    def encode(self) -> bytes:
+        flags = (0x80 if self.enabled else 0x00) | (self.weekday_mask & 0x7F)
+        return bytes([
+            flags, self.start_hour & 0xFF, self.start_minute & 0xFF,
+            self.end_hour & 0xFF, self.end_minute & 0xFF,
+        ]) + self.tail
+
+
+@dataclass(frozen=True)
+class GwModeTasks:
+    """The GW DP-4 (MODE_TASKS) payload, decoded.
+
+        01 <run> <task_count:u16-be> <task:7>... 01 64 00 <grade> 02 01 <quick> 01
+
+    Writes start from the last value the device pushed and change only what
+    the command is about, so bytes we don't model (the quick-fragrance
+    duration, the trailing sentinels) go back as the device reported them,
+    as the vendor app does. `run` is 00 while the device is off, 01 while
+    it runs normally, 02 during quick fragrance; the app writes 01 with
+    every grade or customise change.
+    """
+
+    run: int = 0x01
+    tasks: tuple[GwTask, ...] = (GwTask(),)
+    grade: int = 1
+    quick_fragrance: int = 0x28
+    version: int = 0x01
+    countdown: bytes = b"\x01\x64\x00"
+    quick_prefix: bytes = b"\x02\x01"
+    quick_suffix: bytes = b"\x01"
+
+    _TAIL = 8
+
+    @classmethod
+    def decode(cls, payload: bytes) -> GwModeTasks | None:
+        if len(payload) < 4 + cls._TAIL:
+            return None
+        count = int.from_bytes(payload[2:4], "big")
+        end = 4 + count * GwTask.SIZE
+        if len(payload) != end + cls._TAIL:
+            return None
+        tail = payload[end:]
+        return cls(
+            version=payload[0],
+            run=payload[1],
+            tasks=tuple(GwTask.decode(payload[i:i + GwTask.SIZE])
+                        for i in range(4, end, GwTask.SIZE)),
+            countdown=bytes(tail[0:3]),
+            grade=tail[3],
+            quick_prefix=bytes(tail[4:6]),
+            quick_fragrance=tail[6],
+            quick_suffix=bytes(tail[7:8]),
+        )
+
+    def encode(self) -> bytes:
+        return (
+            bytes([self.version, self.run])
+            + len(self.tasks).to_bytes(2, "big")
+            + b"".join(t.encode() for t in self.tasks)
+            + self.countdown + bytes([self.grade & 0xFF])
+            + self.quick_prefix + bytes([self.quick_fragrance & 0xFF]) + self.quick_suffix
+        )
+
+    def with_grade(self, grade: int) -> GwModeTasks:
+        """Grade 1-5 in 24-hour mode; 0 means customise mode is active."""
+        return replace(self, run=0x01, grade=grade)
+
+    def with_task(self, task: GwTask) -> GwModeTasks:
+        return replace(self, run=0x01, tasks=(task,))
+
+
 class ScentMarketingGwProtocol(BleProtocol):
     """Scent Marketing — GW family (EE01 service), plain binary DP protocol.
 
@@ -940,42 +1034,11 @@ class ScentMarketingGwProtocol(BleProtocol):
     # Schedule (DP 4) — interval tasks + customize-gear
     # ------------------------------------------------------------------
 
-    def build_schedule(self, slots: list["ScheduleSlot"],
-                       weekday_mask: int = 0x7F,
-                       grade: int = 1) -> bytes:
-        """Build a Dp-4 MODE_TASKS frame.
-
-        Layout verified against packetlogger captures (everything big-endian):
-
-            FF NN                            frame header + tx counter
-            00 04 AF <len:u16>               DP 4 header
-            01 01                            sub-version
-            00 <task_count>                  task count u16
-            for each task: 7 bytes
-                [enabled<<7 | weekday_mask:7] [start_h] [start_m]
-                [end_h] [end_m] [01] [01]
-            01 64 00 <grade>       countdown(?) + global grade
-            02 01 <burst_dur> 01           quick-fragrance sentinel
-
-            ``grade`` is 1-5 in 24-hour mode; 0 means 'customise mode active'
-        """
-        task_count = len(slots)
-        payload = bytearray()
-        payload += bytes([0x01, 0x01])                # sub-version
-        payload += bytes([0x00, task_count & 0xFF])   # task count u16
-        for slot in slots:
-            day_bits = weekday_mask & 0x7F
-            flags = day_bits | (0x80 if slot.enabled else 0x00)
-            payload += bytes([
-                flags & 0xFF,
-                slot.start_hour & 0xFF, slot.start_minute & 0xFF,
-                slot.end_hour & 0xFF, slot.end_minute & 0xFF,
-                0x01, 0x01,
-            ])
-        payload += bytes([0x01, 0x64, 0x00, grade & 0xFF])
-        payload += bytes([0x02, 0x01, 0x28, 0x01])    # quick-fragrance sentinel
-        dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, bytes(payload))
-        return self._build_frame([dp4])
+    def build_mode_tasks(self, mode_tasks: GwModeTasks) -> bytes:
+        """Build a DP-4 write. See GwModeTasks for the payload layout."""
+        return self._build_frame([
+            self._build_composite_dp(SM_GW_DP_MODE_TASKS, mode_tasks.encode()),
+        ])
 
     # DP-15 customise: device-reported limits (min/max for both axes)
     # The iOS app rewrites these unchanged on every customise write, so we
@@ -986,30 +1049,14 @@ class ScentMarketingGwProtocol(BleProtocol):
     ])
 
     def build_customize(self, work_seconds: int, pause_seconds: int,
-                        grade: int = 0) -> bytes:
-        """Build a Dp-4 (grade reset) + DP-15 (customise work/pause) frame
+                        mode_tasks: GwModeTasks) -> bytes:
+        """Build a DP-4 (grade 0) + DP-15 (customise work/pause) frame.
 
         Customise mode is mutually exclusive with the grade selector on
-        the device side, so we emit DP-4 with grade=0 to match the iOS app's behaviour
-        otherwse the device may silently revert"""
-        slot = ScheduleSlot(
-            start_hour=0, start_minute=0,
-            end_hour=23, end_minute=59,
-            enabled=True
-        )
-    #     Build DP-4 inline (without wrapping in its own frame) so we can
-    #  ship both DPs together
-        task_payload = bytearray()
-        task_payload += bytes([0x01, 0x01, 0x00, 0x01])
-        task_payload += bytes([
-            0x7F | 0x80,
-            slot.start_hour, slot.start_minute,
-            slot.end_hour, slot.end_minute,
-            0x01, 0x01,
-        ])
-        task_payload += bytes([0x01, 0x64, 0x00, grade & 0xFF])
-        task_payload += bytes([0x02, 0x01, 0x28, 0x01])
-        dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, bytes(task_payload))
+        the device side, so we emit DP-4 with grade=0 to match the iOS
+        app's behaviour, otherwise the device may silently revert.
+        `mode_tasks` should already carry grade 0 (`with_grade(0)`)."""
+        dp4 = self._build_composite_dp(SM_GW_DP_MODE_TASKS, mode_tasks.encode())
         cust_payload = bytes([
             (work_seconds >> 8) & 0xFF, work_seconds & 0xFF,
             (pause_seconds >> 8) & 0xFF, pause_seconds & 0xFF,
@@ -1115,12 +1162,11 @@ class ScentMarketingGwProtocol(BleProtocol):
 
     def _dispatch_composite(self, dp_id: int, type_tag: int, payload: bytes, result: dict) -> None:
         """Composite-DP dispatcher shared by binary + Tuya parsers."""
-        if dp_id == SM_GW_DP_MODE_TASKS and len(payload) >= 4:
-            # Grade lives in the trailing `01 64 00 GG` countdown sentinel,
-            # 8 bytes from the end of the payload (followed by the
-            # quick-fragrance snetinel `02 01 NN MM`)
-            if len(payload) >= 8:
-                result["grade"] = payload[-5] & 0xFF
+        if dp_id == SM_GW_DP_MODE_TASKS:
+            mode_tasks = GwModeTasks.decode(payload)
+            if mode_tasks is not None:
+                result["gw_mode_tasks"] = mode_tasks
+                result["grade"] = mode_tasks.grade
         elif dp_id == SM_GW_DP_VERSION:
             result["firmware_version"] = payload.split(b"\x00", 1)[0].decode("ascii", errors="replace")
         elif dp_id == SM_GW_DP_NAME:
