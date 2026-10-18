@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 from .const import (
     DeviceType,
@@ -104,8 +104,37 @@ class DiffuserState:
     password_required: bool | None = None  # GW device demands password auth
     firmware_version: str | None = None    # PCB+MCU version string
     gw_mode_tasks: "GwModeTasks | None" = None  # last DP-4 the device pushed
+    remark: str | None = None              # GW user remark (DP 20)
     #AromaWave: per-mode schedule, keyed by 1-based mode index
     aromawave_modes: dict[int, AromaWaveMode] = field(default_factory=dict)
+
+    # A schedule time reported without minutes means the top of the hour
+    # for a start and the end of it for an end.
+    _MINUTE_DEFAULTS = {"start_hour": ("start_minute", 0), "end_hour": ("end_minute", 59)}
+
+    def apply(self, updates: dict) -> bool:
+        """Fold a parser's updates into this state. Returns whether any
+        state field was updated; keys that aren't fields are ignored."""
+        changed = False
+        for key, value in updates.items():
+            if key == "aromawave_mode_updates":
+                for mode_idx, mode_fields in value.items():
+                    mode = self.aromawave_modes.setdefault(mode_idx, AromaWaveMode())
+                    for name, mode_value in mode_fields.items():
+                        setattr(mode, name, mode_value)
+                changed = True
+            elif key in _STATE_FIELDS:
+                setattr(self, key, value)
+                if key in self._MINUTE_DEFAULTS:
+                    minute_key, default = self._MINUTE_DEFAULTS[key]
+                    setattr(self, minute_key, updates.get(minute_key, default))
+                changed = True
+            else:
+                _LOGGER.debug("Ignoring unknown state update %s=%r", key, value)
+        return changed
+
+_STATE_FIELDS = {f.name for f in fields(DiffuserState)} - {"aromawave_modes"}
+
 
 @dataclass
 class ScheduleSlot:
