@@ -217,8 +217,11 @@ SM_GW_DP_REMARK = 20
 SM_GW_DP_MULTI_NOZZLE = 23
 SM_GW_DP_NOZZLE_CUSTOM = 24
 
-# Marker byte that prefixes a 5-byte ASCII password inside DP 13.
-SM_GW_PASSWORD_MARKER = 0xC0
+# Marker byte that prefixes the 4-byte ASCII password inside DP 13: 0x01
+# checks it (the Scent Home app's write; the device replies 0xA1 when it
+# matches). 0xC0, from the decompiled encodePassword, gets a different reply
+# (0xC1) and isn't the check.
+SM_GW_PASSWORD_MARKER = 0x01
 SM_GW_PASSWORD_OK_BYTE = 0xA1
 
 # Init/keep-alive packet sent after successful password verification.

@@ -1066,9 +1066,10 @@ class ScentMarketingGwProtocol(BleProtocol):
     def build_password(self, password: str) -> bytes:
         """Build a DP-13 password-check write.
 
-        Mirrors `BluetoothDataParser.encodePassword()`: a composite DP-13
-        with a fixed declared length of 5 bytes, leading with the
-        `0xC0` marker byte followed by a 4-byte ASCII password.
+        A composite DP-13 with a fixed declared length of 5 bytes: the
+        check marker (0x01, as the Scent Home app sends) followed by a
+        4-byte ASCII password. The device replies with an inline DP-13
+        (0xA1 when the password matches).
         """
         pwd_bytes = password.encode("ascii")[:4].ljust(4, b"\x00")
         payload = bytes([SM_GW_PASSWORD_MARKER]) + pwd_bytes
@@ -1207,6 +1208,8 @@ class ScentMarketingGwProtocol(BleProtocol):
                     result["phase"] = "idle" if result["power"] else "off"
                 elif dp_id == SM_GW_DP_LOCK and len(payload) >= 1:
                     result["lock"] = payload[0] == 1
+                elif dp_id == SM_GW_DP_PASSWORD and len(payload) >= 1:
+                    result["password_required"] = payload[0] != SM_GW_PASSWORD_OK_BYTE
         return result
 
     def _dispatch_composite(self, dp_id: int, type_tag: int, payload: bytes, result: dict) -> None:
@@ -1278,13 +1281,23 @@ class ScentMarketingGwProtocol(BleProtocol):
             result["lock"] = frame[idx + 1] == 1
             return idx + 2
 
-        # All remaining DPs we care about are composite (AF/BF-tagged)
-        # with a 2-byte big-endian length prefix.
+        # Composite DPs (AF/BF-tagged) have a 2-byte big-endian length
+        # prefix. Other tags are inline: the low nibble is the value size
+        # (the password reply is 0D 11 A1).
         type_tag = frame[idx]
         if type_tag not in (SM_GW_TYPE_BINARY, SM_GW_TYPE_TEXT):
-            # Unknown / inline DP — bail out, the rest of the frame is
-            # likely misaligned anyway.
-            return len(frame)
+            size = type_tag & 0x0F
+            if not size:
+                # Unknown tag: the rest of the frame is likely misaligned.
+                return len(frame)
+            value = frame[idx + 1:idx + 1 + size]
+            if dp_id == SM_GW_DP_PASSWORD and len(value) == size:
+                result["password_required"] = value[0] != SM_GW_PASSWORD_OK_BYTE
+                if value[0] != SM_GW_PASSWORD_OK_BYTE:
+                    _LOGGER.warning("Scent Marketing GW: password reply 0x%02X "
+                                    "(0x%02X = accepted)", value[0],
+                                    SM_GW_PASSWORD_OK_BYTE)
+            return idx + 1 + size
 
         length = (frame[idx + 1] << 8) | frame[idx + 2]
         payload_start = idx + 3

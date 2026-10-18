@@ -199,8 +199,6 @@ async def test_diagnostics_redact_password(
     assert "8888" not in diag
 
 
-@pytest.mark.xfail(strict=True, reason="sm_metadata.raw_hex embeds the MAC from the "
-                                       "advertisement and is not redacted")
 async def test_diagnostics_redact_mac(
     hass: HomeAssistant, bt: FakeBluetooth, gw_entry: MockConfigEntry
 ) -> None:

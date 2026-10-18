@@ -55,7 +55,7 @@ async def async_get_config_entry_diagnostics(
     payload: dict[str, Any] = {
         "entry": {
             "title": entry.title,
-            "data": async_redact_data(dict(entry.data), TO_REDACT),
+            "data": _redact_entry_data(dict(entry.data)),
             "options": dict(entry.options),
         },
         "device": {
@@ -68,12 +68,33 @@ async def async_get_config_entry_diagnostics(
             "supports_fan": device.supports_fan if device else None,
             "supports_cloud": device.supports_cloud if device else None,
         },
-        "sm_metadata": async_redact_data(
+        "sm_metadata": _redact_metadata(
             dict(device.sm_metadata) if device and device.sm_metadata else {},
-            TO_REDACT,
+            entry.data.get(CONF_BLE_ADDRESS, ""),
         ),
         "state": state_snapshot,
         "recent_notifications_hex": device.recent_notifications if device else [],
         "recent_commands_hex": device.recent_commands if device else [],
     }
     return payload
+
+
+def _redact_metadata(meta: dict[str, Any], address: str) -> dict[str, Any]:
+    """Redact the metadata, including the MAC the advertisement embeds in
+    raw_hex (the device's own MAC and the one it advertises, which can
+    differ)."""
+    macs = {m.replace(":", "").upper() for m in (address, meta.get("mac_from_adv") or "") if m}
+    raw = meta.get("raw_hex")
+    if raw:
+        for mac in macs:
+            raw = raw.upper().replace(mac, "*" * len(mac))
+        meta["raw_hex"] = raw
+    return async_redact_data(meta, TO_REDACT)
+
+
+def _redact_entry_data(data: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(data.get("sm_metadata"), dict):
+        data["sm_metadata"] = _redact_metadata(
+            dict(data["sm_metadata"]), data.get(CONF_BLE_ADDRESS, "")
+        )
+    return async_redact_data(data, TO_REDACT)

@@ -203,8 +203,6 @@ def test_customise_before_any_state_matches_app(proto: ScentMarketingGwProtocol)
     assert ours == {4: app[4], 15: app[15]}
 
 
-@pytest.mark.xfail(strict=True, reason="the Scent Home app sends marker 0x01 before the "
-                                       "password; build_password sends 0xC0")
 def test_password_matches_app(proto: ScentMarketingGwProtocol) -> None:
     assert proto.build_password("8888") == app_write("app_session", 0)
 
@@ -262,10 +260,17 @@ def test_lamp_state_follows_app_session(proto: ScentMarketingGwProtocol) -> None
     assert not any(seen[3:])
 
 
-@pytest.mark.xfail(strict=True, reason="the password reply is an inline DP (type 0x11, "
-                                       "value 0xA1 = accepted); the parser only reads "
-                                       "length-prefixed DP-13")
 def test_password_accepted_reply(proto: ScentMarketingGwProtocol) -> None:
     reply = device_frame("app_session", 0)
     assert reply.hex() == "0001000d11a1"
     assert proto.parse_frame(reply) == {"password_required": False}
+
+
+def test_password_other_reply_requires_password(proto: ScentMarketingGwProtocol) -> None:
+    # A326's live reply to the old 0xC0 marker.
+    assert proto.parse_frame(bytes.fromhex("0001000d11c1")) == {"password_required": True}
+
+
+def test_inline_dp_before_composite_is_skipped(proto: ScentMarketingGwProtocol) -> None:
+    frame = bytes.fromhex("0002000d11a1" "000baf00020101")
+    assert proto.parse_frame(frame) == {"password_required": False, "light_on": True}
