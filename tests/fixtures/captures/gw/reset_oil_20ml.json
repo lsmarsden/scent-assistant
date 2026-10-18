@@ -1,0 +1,27 @@
+{
+ "source": "AscentResetOilLevelTo20ml.pklg",
+ "family": "scent_marketing_gw",
+ "description": "A326 (Ascent app): reset oil level to 20 ml",
+ "events": [
+  {
+   "t": 0.0,
+   "dir": "tx",
+   "hex": "0801ff010008af000d7100780078001406a40000"
+  },
+  {
+   "t": 0.083,
+   "dir": "tx",
+   "hex": "08020000"
+  },
+  {
+   "t": 0.173,
+   "dir": "rx",
+   "hex": "280100010008af000d7100780078001406a40000"
+  },
+  {
+   "t": 0.176,
+   "dir": "rx",
+   "hex": "28020000"
+  }
+ ]
+}

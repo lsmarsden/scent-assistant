@@ -1,0 +1,30 @@
+[project]
+name = "scent-assistant"
+version = "0.0.0"
+description = "Home Assistant integration for BLE scent diffusers (test harness only; the integration ships from custom_components/)."
+requires-python = ">=3.14.2"
+
+[dependency-groups]
+dev = [
+    # Pinned to the Home Assistant release running in production (2026.10.2).
+    # Bump together with HA.
+    "pytest-homeassistant-custom-component==0.13.373",
+    # Requirements of the HA bluetooth + usb components (device.py imports
+    # homeassistant.components.bluetooth). Versions from their manifests in
+    # homeassistant==2026.10.2.
+    "aiousbwatcher==1.1.2",
+    "serialx==1.11.0",
+    "bleak==3.0.2",
+    "bleak-retry-connector==4.7.1",
+    "bluetooth-adapters==2.4.0",
+    "bluetooth-auto-recovery==1.6.4",
+    "bluetooth-data-tools==1.29.24",
+    "dbus-fast==5.0.22",
+    "habluetooth==7.1.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

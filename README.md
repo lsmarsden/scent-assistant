@@ -281,6 +281,30 @@ This integration was built by reverse engineering the BLE protocols of both devi
 
 Contributions are welcome! If you have a diffuser that uses the Aroma-Link or Aroma Buddy app and can help test, please [open an issue](https://github.com/mr-sparks/scent-assistant/issues).
 
+### Running the tests
+
+```bash
+uv run pytest
+```
+
+`uv` installs Python and the Home Assistant version pinned in `pyproject.toml` (bump it together with production HA). The tests cover the Scent Marketing GW and Aroma Wave families in three layers:
+
+- `tests/protocol/`: frame builders and parsers, compared byte for byte with PacketLogger captures of the vendor apps (`tests/fixtures/captures/`).
+- `tests/device/`: the device manager's connection lifecycle and commands, over a fake BLE link with a virtual clock (`tests/fakes.py`).
+- `tests/integration/`: config flow, entity set and services in a real Home Assistant test instance.
+
+Tests marked `xfail(strict=True)` record known differences from the vendor app; fixing one makes its test pass, and strict mode then asks you to drop the marker.
+
+To add a capture, record it with PacketLogger, then:
+
+```bash
+uv run python scripts/pklg_to_fixture.py capture.pklg \
+    tests/fixtures/captures/<family>/<name>.json \
+    --family <device_type> --description "What you did in the app"
+```
+
+Commit the JSON, not the `.pklg`: the raw capture also holds your phone's address and unrelated Bluetooth traffic.
+
 ---
 
 ## &#x1F4DC; License
