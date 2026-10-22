@@ -1,6 +1,9 @@
 """Base entity shared by every Scent Assistant platform."""
 from __future__ import annotations
 
+from collections.abc import Awaitable
+
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity
 
 from .device import ScentDiffuserDevice
@@ -33,3 +36,11 @@ class ScentEntity(Entity):
         if not self._device.available:
             return False
         return self._requires is None or getattr(self._device.state, self._requires) is not None
+
+    async def _command(self, sent: Awaitable[bool]) -> None:
+        """Await a device command and fail the service call if it didn't
+        reach the device, so automations and scripts see it in their traces."""
+        if not await sent:
+            raise HomeAssistantError(
+                f"{self._device.name}: command not delivered (device not reachable over Bluetooth)"
+            )

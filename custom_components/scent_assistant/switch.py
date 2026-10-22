@@ -79,10 +79,10 @@ class DiffuserPowerSwitch(ScentEntity, SwitchEntity):
         return self._device.state.power
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._device.set_power(True)
+        await self._command(self._device.set_power(True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_power(False)
+        await self._command(self._device.set_power(False))
 
 
 class DiffuserLockSwitch(ScentEntity, SwitchEntity):
@@ -102,10 +102,10 @@ class DiffuserLockSwitch(ScentEntity, SwitchEntity):
         return self._device.state.lock
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._device.set_lock(True)
+        await self._command(self._device.set_lock(True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_lock(False)
+        await self._command(self._device.set_lock(False))
 
 
 class DiffuserLampSwitch(ScentEntity, SwitchEntity):
@@ -125,10 +125,10 @@ class DiffuserLampSwitch(ScentEntity, SwitchEntity):
         return self._device.state.light_on
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._device.set_lamp(True)
+        await self._command(self._device.set_lamp(True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_lamp(False)
+        await self._command(self._device.set_lamp(False))
 
 
 class DiffuserFanSwitch(ScentEntity, SwitchEntity):
@@ -158,10 +158,10 @@ class DiffuserFanSwitch(ScentEntity, SwitchEntity):
         return {}
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._device.set_fan(True)
+        await self._command(self._device.set_fan(True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_fan(False)
+        await self._command(self._device.set_fan(False))
 
 class AromaWaveModeSwitch(ScentEntity, SwitchEntity):
     """Toggle one of the AromaWave scheduled modes on or off."""
@@ -178,10 +178,10 @@ class AromaWaveModeSwitch(ScentEntity, SwitchEntity):
         return mode.enabled if mode else None
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self._device.set_aromawave_mode(self._mode_idx, enabled=True)
+        await self._command(self._device.set_aromawave_mode(self._mode_idx, enabled=True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_aromawave_mode(self._mode_idx, enabled=False)
+        await self._command(self._device.set_aromawave_mode(self._mode_idx, enabled=False))
 
 
 class DiffuserHoldConnectionSwitch(ScentEntity, SwitchEntity):

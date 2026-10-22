@@ -67,7 +67,7 @@ class WorkDurationNumber(ScentEntity, NumberEntity):
         return self._device.state.work_seconds or 10
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_work_duration(int(value))
+        await self._command(self._device.set_work_duration(int(value)))
 
 
 class PauseDurationNumber(ScentEntity, NumberEntity):
@@ -89,7 +89,7 @@ class PauseDurationNumber(ScentEntity, NumberEntity):
         return self._device.state.pause_seconds or 120
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_pause_duration(int(value))
+        await self._command(self._device.set_pause_duration(int(value)))
 
 
 class GwWorkDurationNumber(ScentEntity, NumberEntity):
@@ -114,7 +114,7 @@ class GwWorkDurationNumber(ScentEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         pause = self._device.state.pause_seconds or 60
-        await self._device.set_customize(int(value), pause)
+        await self._command(self._device.set_customize(int(value), pause))
 
 class GwPauseDurationNumber(ScentEntity, NumberEntity):
     """GW customise pause duration in seconds (60-300)"""
@@ -138,7 +138,7 @@ class GwPauseDurationNumber(ScentEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         work = self._device.state.work_seconds or 5
-        await self._device.set_customize(work, int(value))
+        await self._command(self._device.set_customize(work, int(value)))
 
 
 class GwGradeNumber(ScentEntity, NumberEntity):
@@ -166,7 +166,7 @@ class GwGradeNumber(ScentEntity, NumberEntity):
     _requires = "grade"
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_grade(int(value))
+        await self._command(self._device.set_grade(int(value)))
 
 
 class ScentimentLevelNumber(ScentEntity, NumberEntity):
@@ -187,7 +187,7 @@ class ScentimentLevelNumber(ScentEntity, NumberEntity):
         return self._device.state.level
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_level(int(value))
+        await self._command(self._device.set_level(int(value)))
 
 class AromaWaveModeWorkNumber(ScentEntity, NumberEntity):
     """Work-spray duration for an AromaWave scheduled mode (seconds)."""
@@ -210,7 +210,7 @@ class AromaWaveModeWorkNumber(ScentEntity, NumberEntity):
         return mode.work_seconds if mode else None
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_aromawave_mode(self._mode_idx, work_seconds=int(value))
+        await self._command(self._device.set_aromawave_mode(self._mode_idx, work_seconds=int(value)))
 
 class AromaWaveModePauseNumber(ScentEntity, NumberEntity):
     """Pause duration between sprays for an AromaWave scheduled mode (seconds)."""
@@ -233,4 +233,4 @@ class AromaWaveModePauseNumber(ScentEntity, NumberEntity):
         return mode.pause_seconds if mode else None
 
     async def async_set_native_value(self, value: float) -> None:
-        await self._device.set_aromawave_mode(self._mode_idx, pause_seconds=int(value))
+        await self._command(self._device.set_aromawave_mode(self._mode_idx, pause_seconds=int(value)))

@@ -45,8 +45,5 @@ class TimeSyncButton(ScentEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Sync the device clock to current local time."""
-        success = await self._device.sync_time()
-        if success:
-            _LOGGER.info("Time synced to %s", self._device.name)
-        else:
-            _LOGGER.warning("Time sync failed for %s", self._device.name)
+        await self._command(self._device.sync_time())
+        _LOGGER.info("Time synced to %s", self._device.name)

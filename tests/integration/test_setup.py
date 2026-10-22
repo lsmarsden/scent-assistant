@@ -2,12 +2,15 @@
 fake Bluetooth stack: HA service call -> entity -> device manager -> GATT write."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
+from bleak_retry_connector import BleakNotFoundError
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -17,7 +20,11 @@ from custom_components.scent_assistant.const import (
     SM_GW_WRITE_UUID,
 )
 from custom_components.scent_assistant.diagnostics import async_get_config_entry_diagnostics
-from custom_components.scent_assistant.link import LINGER_SECONDS
+from custom_components.scent_assistant.link import (
+    LINGER_SECONDS,
+    SEND_ATTEMPTS,
+    SEND_RETRY_SECONDS,
+)
 from tests.captures import aroma_wave_order, gw_dps, gw_messages, load_capture
 from tests.fakes import GW_ADDRESS, FakeBluetooth
 
@@ -290,3 +297,21 @@ class TestAvailability:
         bt.appear()
         await hass.async_block_till_done()
         assert hass.states.get(power).state != STATE_UNAVAILABLE
+
+
+class TestFailedCommands:
+    """A command that never reaches the device fails the service call, so the
+    script or automation running it shows the failure instead of carrying on."""
+
+    async def test_dev505_power_off_raises_when_unreachable(
+        self, hass: HomeAssistant, bt: FakeBluetooth, aw_entry: MockConfigEntry
+    ) -> None:
+        await setup(hass, aw_entry)
+        await bt.advance(LINGER_SECONDS)
+        bt.connect_errors = [BleakNotFoundError("timeout")] * SEND_ATTEMPTS
+        call = asyncio.ensure_future(hass.services.async_call(
+            "switch", "turn_off", {"entity_id": entity_id(hass, aw_entry, "power")}, blocking=True
+        ))
+        await bt.advance(SEND_RETRY_SECONDS * (SEND_ATTEMPTS - 1))
+        with pytest.raises(HomeAssistantError, match="not delivered"):
+            await call

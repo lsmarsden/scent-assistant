@@ -12,6 +12,10 @@ writes, notifications, polling, availability, and the connection policy:
   follow-ups, then disconnect. Every REFRESH_SECONDS the link connects to
   read the device's state.
 
+A command the link connects for itself (on-demand, or a released hold) is
+tried SEND_ATTEMPTS times, SEND_RETRY_SECONDS apart: at the edge of a
+proxy's range single connects and writes fail often.
+
 The link is available while it is connected or while HA's Bluetooth has a
 connectable advertisement from the device.
 """
@@ -41,6 +45,8 @@ BACKOFF_MAX = 60
 LINGER_SECONDS = 30     # stay connected after a transient command
 RELEASE_SECONDS = 600   # how long a released persistent link stays released
 REFRESH_SECONDS = 300   # on-demand state read interval
+SEND_ATTEMPTS = 3       # tries for a command the link connects for
+SEND_RETRY_SECONDS = 15
 
 _RECENT_NOTIFICATIONS = 20
 _RECENT_COMMANDS = 10
@@ -155,19 +161,32 @@ class BleLink:
 
     async def send(self, frame: bytes) -> bool:
         """Write one command. Connects for it when the policy allows: an
-        on-demand link, or a persistent link whose hold is released. A held
-        persistent link that is reconnecting fails fast instead."""
+        on-demand link, or a persistent link whose hold is released; a failed
+        connect or write is then retried. A held persistent link fails fast
+        instead, since its supervisor owns reconnecting."""
         if not frame or self._stopping:
             return False
-        if not self.connected:
+        for attempt in range(SEND_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(SEND_RETRY_SECONDS)
+                if self._stopping:
+                    return False
+            if not self.connected:
+                if self._held:
+                    return False
+                if not await self._connect():
+                    continue
+            if await self._write(frame):
+                if not self._held:
+                    self._linger_then_disconnect()
+                return True
             if self._held:
                 return False
-            if not await self._connect():
-                return False
-        ok = await self._write(frame)
-        if not self._held:
-            self._linger_then_disconnect()
-        return ok
+            # The connection is probably half dead; start the next try fresh.
+            await self._disconnect()
+        _LOGGER.warning("Command to %s not delivered after %d attempts",
+                        self._name, SEND_ATTEMPTS)
+        return False
 
     async def set_held(self, held: bool) -> None:
         """Hold or release a persistent link. Releasing disconnects so the

@@ -55,7 +55,7 @@ class DiffuserStartTime(ScentEntity, TimeEntity):
         """Set the start time and write schedule to device."""
         self._device.state.start_hour = value.hour
         self._device.state.start_minute = value.minute
-        await self._device.set_schedule(
+        await self._command(self._device.set_schedule(
             weekday_mask=0x7F,  # all days
             start_hour=value.hour,
             start_minute=value.minute,
@@ -63,7 +63,7 @@ class DiffuserStartTime(ScentEntity, TimeEntity):
             end_minute=self._device.state.end_minute,
             work_seconds=self._device.state.work_seconds or 10,
             pause_seconds=self._device.state.pause_seconds or 120,
-        )
+        ))
 
 
 class DiffuserEndTime(ScentEntity, TimeEntity):
@@ -83,7 +83,7 @@ class DiffuserEndTime(ScentEntity, TimeEntity):
         """Set the end time and write schedule to device."""
         self._device.state.end_hour = value.hour
         self._device.state.end_minute = value.minute
-        await self._device.set_schedule(
+        await self._command(self._device.set_schedule(
             weekday_mask=0x7F,  # all days
             start_hour=self._device.state.start_hour,
             start_minute=self._device.state.start_minute,
@@ -91,7 +91,7 @@ class DiffuserEndTime(ScentEntity, TimeEntity):
             end_minute=value.minute,
             work_seconds=self._device.state.work_seconds or 10,
             pause_seconds=self._device.state.pause_seconds or 120,
-        )
+        ))
 
 class AromaWaveModeStartTime(ScentEntity, TimeEntity):
     """Start time for an AromaWave scheduled mode."""
@@ -111,9 +111,9 @@ class AromaWaveModeStartTime(ScentEntity, TimeEntity):
         return time(mode.start_hour, mode.start_minute)
 
     async def async_set_value(self, value: time) -> None:
-        await self._device.set_aromawave_mode(
+        await self._command(self._device.set_aromawave_mode(
             self._mode_idx, start_hour=value.hour, start_minute=value.minute,
-        )
+        ))
 
 class AromaWaveModeEndTime(ScentEntity, TimeEntity):
     """End time for an AromaWave scheduled mode."""
@@ -133,7 +133,7 @@ class AromaWaveModeEndTime(ScentEntity, TimeEntity):
         return time(mode.end_hour, mode.end_minute)
 
     async def async_set_value(self, value: time) -> None:
-        await self._device.set_aromawave_mode(
+        await self._command(self._device.set_aromawave_mode(
             self._mode_idx, end_hour=value.hour, end_minute=value.minute,
-        )
+        ))
 

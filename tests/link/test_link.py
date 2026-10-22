@@ -4,6 +4,8 @@ One class per rule (the class docstring); each test is an example of it.
 """
 from __future__ import annotations
 
+import asyncio
+
 from types import SimpleNamespace
 
 from bleak_retry_connector import BleakNotFoundError
@@ -20,6 +22,8 @@ from custom_components.scent_assistant.link import (
     LINGER_SECONDS,
     REFRESH_SECONDS,
     RELEASE_SECONDS,
+    SEND_ATTEMPTS,
+    SEND_RETRY_SECONDS,
 )
 from custom_components.scent_assistant.protocol_ble import ScentMarketingGwProtocol
 from tests.captures import aroma_wave_order, gw_dps, gw_messages
@@ -220,13 +224,58 @@ class TestOnDemandLink:
         assert len(bt.clients) == 3
         assert aw_orders(bt.client)[-1] == "0500"
 
-    async def test_command_fails_when_device_is_out_of_range(
-        self, make_link, bt: FakeBluetooth
-    ) -> None:
+
+
+class TestCommandRetry:
+    """A command the link connects for is tried 3 times, 15 s apart, before
+    it fails: at the edge of a proxy's range single attempts often fail."""
+
+    async def test_succeeds_once_the_device_is_back(self, make_link, bt: FakeBluetooth) -> None:
         link, _ = await make_link(AW)
         await bt.advance(LINGER_SECONDS)
         bt.vanish()
-        assert await link.send(link.protocol.build_power(True)) is False
+        power = link.protocol.build_power(False)
+        sent = asyncio.ensure_future(link.send(power))
+        await settle()
+        bt.appear()
+        await bt.advance(SEND_RETRY_SECONDS)
+        assert await sent is True
+        assert bt.client.written()[-1] == power
+
+    async def test_retries_a_failed_connect(self, make_link, bt: FakeBluetooth) -> None:
+        link, _ = await make_link(AW)
+        await bt.advance(LINGER_SECONDS)
+        bt.connect_errors = [BleakNotFoundError("timeout"), BleakNotFoundError("timeout")]
+        sent = asyncio.ensure_future(link.send(link.protocol.build_power(False)))
+        await bt.advance(SEND_RETRY_SECONDS * 2)
+        assert await sent is True
+
+    async def test_a_failed_write_reconnects_and_tries_again(
+        self, make_link, bt: FakeBluetooth
+    ) -> None:
+        link, _ = await make_link(AW)
+        bt.client.fail_writes = True  # half-dead connection
+        power = link.protocol.build_power(False)
+        sent = asyncio.ensure_future(link.send(power))
+        await bt.advance(SEND_RETRY_SECONDS)
+        assert await sent is True
+        assert len(bt.clients) == 2
+        assert bt.client.written()[-1] == power
+
+    async def test_fails_after_3_attempts(self, make_link, bt: FakeBluetooth) -> None:
+        link, _ = await make_link(AW)
+        await bt.advance(LINGER_SECONDS)
+        bt.vanish()
+        sent = asyncio.ensure_future(link.send(link.protocol.build_power(False)))
+        await bt.advance(SEND_RETRY_SECONDS * (SEND_ATTEMPTS - 1))
+        assert await sent is False
+        assert bt.sleeps.count(SEND_RETRY_SECONDS) == SEND_ATTEMPTS - 1
+
+    async def test_held_link_still_fails_fast(self, make_link, bt: FakeBluetooth) -> None:
+        link, _ = await make_link(GW)
+        bt.client.fail_writes = True
+        assert await link.send(POWER_ON) is False
+        assert SEND_RETRY_SECONDS not in bt.sleeps
 
 
 class TestAvailability:

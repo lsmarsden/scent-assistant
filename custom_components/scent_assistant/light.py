@@ -53,9 +53,9 @@ class ScentimentRgbLight(ScentEntity, LightEntity):
     async def async_turn_on(self, **kwargs) -> None:
         rgb = kwargs.get(ATTR_RGB_COLOR)
         if rgb is not None:
-            await self._device.set_rgb_color(rgb[0], rgb[1], rgb[2])
+            await self._command(self._device.set_rgb_color(rgb[0], rgb[1], rgb[2]))
         # Always make sure the LED itself is on after a color change.
-        await self._device.set_rgb_led(True)
+        await self._command(self._device.set_rgb_led(True))
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._device.set_rgb_led(False)
+        await self._command(self._device.set_rgb_led(False))
